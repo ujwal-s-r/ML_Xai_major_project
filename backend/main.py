@@ -18,7 +18,7 @@ from pydantic import BaseModel, field_validator
 # Import video analyzer
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from processors.video_analyzer import VideoAnalyzer
+from processors.batch_video_analyzer import BatchVideoAnalyzer
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -48,13 +48,8 @@ def get_video_analyzer():
     """Lazy-load video analyzer to avoid startup delay."""
     global video_analyzer
     if video_analyzer is None:
-        print("Initializing Video Analyzer...")
-        video_analyzer = VideoAnalyzer(
-            emotion_sample_rate=10,  # 3 FPS at 30fps
-            blink_sample_rate=2,     # 15 FPS at 30fps
-            iris_sample_rate=2,      # 15 FPS at 30fps
-            gaze_sample_rate=3       # 10 FPS at 30fps
-        )
+        print("Initializing Batch Video Analyzer...")
+        video_analyzer = BatchVideoAnalyzer()
     return video_analyzer
 
 
@@ -337,8 +332,8 @@ async def start_video_session():
     """
     try:
         analyzer = get_video_analyzer()
-        analyzer.start_analysis()
-        return {"status": "started", "message": "Video analysis session started"}
+        # BatchVideoAnalyzer doesn't need start_analysis, it processes in batch
+        return {"status": "started", "message": "Video analysis session ready"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start session: {str(e)}")
 
@@ -356,37 +351,59 @@ async def get_trigger_video():
     )
 
 
-class FrameProcessRequest(BaseModel):
-    """Single frame processing request."""
-    frame_base64: str
-    frame_number: int
+class BatchFramesRequest(BaseModel):
+    """Batch of frames for processing."""
+    frames_base64: List[str]  # List of base64 encoded images
+    fps: float = 30.0
     session_id: Optional[str] = None
 
 
-@app.post("/api/video/process-frame")
-async def process_video_frame(request: FrameProcessRequest):
+@app.post("/api/video/process-batch")
+async def process_video_batch(request: BatchFramesRequest):
     """
-    Process a single frame through all video analysis models.
-    Returns real-time analysis results for emotion, blink, iris, and gaze.
+    Process a batch of frames sequentially through all models.
+    This replaces the per-frame processing.
+    
+    Returns complete timeline and summary after processing all frames.
     """
     try:
-        # Decode base64 image
-        img_data = base64.b64decode(request.frame_base64.split(',')[1] if ',' in request.frame_base64 else request.frame_base64)
-        nparr = np.frombuffer(img_data, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        print(f"\n{'='*60}")
+        print(f"Received batch: {len(request.frames_base64)} frames @ {request.fps} FPS")
+        print(f"{'='*60}")
         
-        if frame is None:
-            raise HTTPException(status_code=400, detail="Invalid image data")
+        # Decode all frames
+        frames = []
+        for idx, frame_b64 in enumerate(request.frames_base64):
+            img_data = base64.b64decode(frame_b64.split(',')[1] if ',' in frame_b64 else frame_b64)
+            nparr = np.frombuffer(img_data, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                print(f"⚠️ Warning: Frame {idx} failed to decode")
+                continue
+            
+            frames.append(frame)
         
-        # Get analyzer and process frame
+        print(f"Successfully decoded {len(frames)} frames")
+        
+        # Get analyzer and process batch
         analyzer = get_video_analyzer()
-        result = analyzer.process_frame(frame, request.frame_number)
+        analyzer.set_frames(frames, request.fps)
         
-        return result
+        # Process all frames sequentially
+        results = analyzer.process_all_sequential()
+        
+        print(f"\n✓ Batch processing complete!")
+        print(f"  Timeline entries: {len(results['timeline'])}")
+        print(f"  Summary generated: {bool(results['summary'])}\n")
+        
+        return results
         
     except Exception as e:
-        print(f"Error processing frame {request.frame_number}: {e}")
-        raise HTTPException(status_code=500, detail=f"Frame processing failed: {str(e)}")
+        print(f"Error processing batch: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
 
 @app.post("/api/video/submit")
@@ -394,36 +411,101 @@ async def submit_video_analysis(submission: VideoSubmission):
     """
     Submit video analysis results with timeline and summary.
     Saves to video_results.jsonl for later processing.
-    Also returns server-computed summary from VideoAnalyzer.
     """
     try:
-        # Get server-side summary
-        analyzer = get_video_analyzer()
-        server_summary = analyzer.get_summary()
-        
         record = {
             "session_id": submission.session_id,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "trigger_video": submission.trigger_video,
             "duration_seconds": submission.duration_seconds,
             "timeline": submission.timeline,
-            "client_summary": submission.summary,  # From client calculation
-            "server_summary": server_summary  # From VideoAnalyzer
+            "server_summary": submission.summary  # Summary already computed by backend
         }
         
         with open(VIDEO_RESULTS_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             
     except Exception as e:
+        print(f"Error saving video data: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save video data: {e}")
     
     return {
         "saved": True,
         "session_id": submission.session_id,
         "timeline_entries": len(submission.timeline),
-        "client_summary": submission.summary,
-        "server_summary": server_summary
+        "summary": submission.summary
     }
+
+
+# ===================================
+# Dashboard & Results Endpoints
+# ===================================
+
+@app.get("/dashboard")
+async def serve_dashboard_page():
+    """Serve the dashboard visualization page."""
+    dashboard_path = FRONTEND_DIR / "dashboard.html"
+    if not dashboard_path.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return FileResponse(dashboard_path)
+
+
+@app.get("/api/results/{session_id}")
+async def get_session_results(session_id: str):
+    """
+    Retrieve all results for a given session ID.
+    Returns PHQ-8, game, and video data combined.
+    """
+    results = {
+        "session_id": session_id,
+        "phq8": None,
+        "game": None,
+        "video": None
+    }
+    
+    # Read PHQ-8 results
+    if RESULTS_PATH.exists():
+        try:
+            with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    record = json.loads(line.strip())
+                    if record.get("session_id") == session_id:
+                        results["phq8"] = record
+                        break
+        except Exception as e:
+            print(f"Error reading PHQ-8 results: {e}")
+    
+    # Read game results
+    if GAME_RESULTS_PATH.exists():
+        try:
+            with open(GAME_RESULTS_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    record = json.loads(line.strip())
+                    if record.get("session_id") == session_id:
+                        results["game"] = record
+                        break
+        except Exception as e:
+            print(f"Error reading game results: {e}")
+    
+    # Read video results
+    if VIDEO_RESULTS_PATH.exists():
+        try:
+            with open(VIDEO_RESULTS_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    record = json.loads(line.strip())
+                    if record.get("session_id") == session_id:
+                        results["video"] = record
+                        break
+        except Exception as e:
+            print(f"Error reading video results: {e}")
+    
+    # Check if any data was found
+    if not any([results["phq8"], results["game"], results["video"]]):
+        raise HTTPException(status_code=404, detail=f"No data found for session {session_id}")
+    
+    return results
 
 
 if __name__ == "__main__":

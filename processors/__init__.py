@@ -2,6 +2,7 @@
 
 from .emotion_analyzer import EmotionAnalyzer
 from .blink_detector import BlinkDetector
-from .gaze_estimator import GazeEstimator
 from .iris_tracker import IrisTracker
-from .video_analyzer import VideoAnalyzer 
+from .video_analyzer import VideoAnalyzer
+
+# Note: Gaze estimation is integrated directly in VideoAnalyzer using L2CS Pipeline 
