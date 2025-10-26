@@ -56,6 +56,18 @@ async function startAnalysis() {
     startBtn.textContent = 'Requesting camera access...';
     
     try {
+        // Start backend session
+        const sessionResponse = await fetch('/api/video/start-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (!sessionResponse.ok) {
+            throw new Error('Failed to start backend session');
+        }
+        
+        console.log('Backend session started');
+        
         // Request webcam access
         stream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -92,8 +104,8 @@ async function startAnalysis() {
         videoElement.addEventListener('ended', onVideoEnded);
         
     } catch (error) {
-        console.error('Failed to access webcam:', error);
-        alert('Could not access your webcam. Please grant camera permissions and try again.');
+        console.error('Failed to start analysis:', error);
+        alert('Could not start analysis. Please check camera permissions and backend connection.');
         startBtn.disabled = false;
         startBtn.textContent = 'Start Analysis';
     }
@@ -140,68 +152,45 @@ async function processFrameLoop() {
 
 async function processFrame(base64Image, frameNum) {
     try {
-        // Call Python backend to process frame
-        // For now, we'll simulate processing client-side
-        // In production, you'd send to backend
+        // Send frame to backend for real processing
+        const response = await fetch('/api/video/process-frame', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                frame_base64: base64Image,
+                frame_number: frameNum,
+                session_id: sessionId
+            })
+        });
         
-        const frameData = {
-            timestamp: frameNum / FPS,
-            frame_number: frameNum,
-            processed: {
-                emotion: frameNum % 10 === 0,
-                blink: frameNum % 2 === 0,
-                iris: frameNum % 2 === 0,
-                gaze: frameNum % 3 === 0
-            }
-        };
+        if (!response.ok) {
+            console.error(`Backend processing failed for frame ${frameNum}`);
+            return;
+        }
         
-        // Simulate results (replace with actual backend call)
-        if (frameNum % 10 === 0) {
-            const emotions = ['neutral', 'sad', 'happy', 'fear', 'angry', 'surprise', 'disgust'];
-            frameData.emotion = {
-                label: emotions[Math.floor(Math.random() * emotions.length)],
-                confidence: 0.7 + Math.random() * 0.3,
-                scores: {}
-            };
+        const frameData = await response.json();
+        
+        // Update live stats from backend response
+        if (frameData.emotion) {
             latestStats.emotion = frameData.emotion.label;
         }
         
-        if (frameNum % 2 === 0) {
-            const ear = 0.25 + Math.random() * 0.15;
-            frameData.blink = {
-                ear_left: ear,
-                ear_right: ear,
-                avg_ear: ear,
-                is_blinking: ear < 0.22,
-                cumulative_blinks: Math.floor(frameNum / 60)
-            };
+        if (frameData.blink) {
             latestStats.blinks = frameData.blink.cumulative_blinks;
         }
         
-        if (frameNum % 2 === 0) {
-            frameData.pupil = {
-                left: 0.03 + Math.random() * 0.01,
-                right: 0.03 + Math.random() * 0.01,
-                avg: 0.03 + Math.random() * 0.01,
-                dilation_ratio: (Math.random() - 0.5) * 0.2
-            };
+        if (frameData.gaze) {
+            latestStats.gaze = frameData.gaze.direction;
         }
         
-        if (frameNum % 3 === 0) {
-            const directions = ['left', 'center', 'right'];
-            const direction = directions[Math.floor(Math.random() * directions.length)];
-            frameData.gaze = {
-                pitch: (Math.random() - 0.5) * 40,
-                yaw: (Math.random() - 0.5) * 60,
-                direction: direction
-            };
-            latestStats.gaze = direction;
-        }
-        
+        // Store in timeline
         timeline.push(frameData);
         
     } catch (error) {
         console.error('Error processing frame:', error);
+        // Continue processing even if one frame fails
     }
 }
 
@@ -230,8 +219,8 @@ async function onVideoEnded() {
         stream.getTracks().forEach(track => track.stop());
     }
     
-    // Calculate summary
-    const summary = calculateSummary();
+    // Calculate client-side summary (for comparison)
+    const clientSummary = calculateSummary();
     
     // Submit to backend
     try {
@@ -245,7 +234,7 @@ async function onVideoEnded() {
                 trigger_video: 'hack.mp4',
                 duration_seconds: videoElement.duration,
                 timeline: timeline,
-                summary: summary
+                summary: clientSummary
             })
         });
         
@@ -256,12 +245,16 @@ async function onVideoEnded() {
         const result = await response.json();
         console.log('Analysis submitted successfully:', result);
         
+        // Use server summary if available, otherwise use client summary
+        const summary = result.server_summary || clientSummary;
+        
         // Show results
         showResults(summary);
         
     } catch (error) {
         console.error('Error submitting analysis:', error);
-        alert('Failed to save analysis. Please try again.');
+        alert('Failed to save analysis. Showing results anyway.');
+        showResults(clientSummary);
     }
 }
 

@@ -5,7 +5,7 @@ Tests Eye Aspect Ratio (EAR) calculation and blink counting
 
 import sys
 import os
-# Add parent directory to path to import context modules
+# Add parent directory to path to import processors modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import cv2

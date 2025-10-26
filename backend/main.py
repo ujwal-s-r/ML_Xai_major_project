@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+import cv2
+import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
+
+# Import video analyzer
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from processors.video_analyzer import VideoAnalyzer
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -32,6 +40,22 @@ app.add_middleware(
 
 # Serve static frontend assets
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+# Initialize Video Analyzer (singleton for all requests)
+video_analyzer = None
+
+def get_video_analyzer():
+    """Lazy-load video analyzer to avoid startup delay."""
+    global video_analyzer
+    if video_analyzer is None:
+        print("Initializing Video Analyzer...")
+        video_analyzer = VideoAnalyzer(
+            emotion_sample_rate=10,  # 3 FPS at 30fps
+            blink_sample_rate=2,     # 15 FPS at 30fps
+            iris_sample_rate=2,      # 15 FPS at 30fps
+            gaze_sample_rate=3       # 10 FPS at 30fps
+        )
+    return video_analyzer
 
 
 class PHQ8Submission(BaseModel):
@@ -305,6 +329,20 @@ async def serve_video_page():
     return FileResponse(video_html_path)
 
 
+@app.post("/api/video/start-session")
+async def start_video_session():
+    """
+    Start a new video analysis session.
+    Resets the analyzer's state.
+    """
+    try:
+        analyzer = get_video_analyzer()
+        analyzer.start_analysis()
+        return {"status": "started", "message": "Video analysis session started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start session: {str(e)}")
+
+
 @app.get("/api/video/trigger")
 async def get_trigger_video():
     """Stream the trigger video file."""
@@ -318,24 +356,64 @@ async def get_trigger_video():
     )
 
 
+class FrameProcessRequest(BaseModel):
+    """Single frame processing request."""
+    frame_base64: str
+    frame_number: int
+    session_id: Optional[str] = None
+
+
+@app.post("/api/video/process-frame")
+async def process_video_frame(request: FrameProcessRequest):
+    """
+    Process a single frame through all video analysis models.
+    Returns real-time analysis results for emotion, blink, iris, and gaze.
+    """
+    try:
+        # Decode base64 image
+        img_data = base64.b64decode(request.frame_base64.split(',')[1] if ',' in request.frame_base64 else request.frame_base64)
+        nparr = np.frombuffer(img_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+        
+        # Get analyzer and process frame
+        analyzer = get_video_analyzer()
+        result = analyzer.process_frame(frame, request.frame_number)
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error processing frame {request.frame_number}: {e}")
+        raise HTTPException(status_code=500, detail=f"Frame processing failed: {str(e)}")
+
+
 @app.post("/api/video/submit")
 async def submit_video_analysis(submission: VideoSubmission):
     """
     Submit video analysis results with timeline and summary.
     Saves to video_results.jsonl for later processing.
+    Also returns server-computed summary from VideoAnalyzer.
     """
-    record = {
-        "session_id": submission.session_id,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "trigger_video": submission.trigger_video,
-        "duration_seconds": submission.duration_seconds,
-        "timeline": submission.timeline,
-        "summary": submission.summary
-    }
-    
     try:
+        # Get server-side summary
+        analyzer = get_video_analyzer()
+        server_summary = analyzer.get_summary()
+        
+        record = {
+            "session_id": submission.session_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "trigger_video": submission.trigger_video,
+            "duration_seconds": submission.duration_seconds,
+            "timeline": submission.timeline,
+            "client_summary": submission.summary,  # From client calculation
+            "server_summary": server_summary  # From VideoAnalyzer
+        }
+        
         with open(VIDEO_RESULTS_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save video data: {e}")
     
@@ -343,7 +421,8 @@ async def submit_video_analysis(submission: VideoSubmission):
         "saved": True,
         "session_id": submission.session_id,
         "timeline_entries": len(submission.timeline),
-        "summary": submission.summary
+        "client_summary": submission.summary,
+        "server_summary": server_summary
     }
 
 
