@@ -197,8 +197,11 @@ class BlinkDetector:
                     # For longer recordings, use standard calculation
                     blink_rate = (self.blink_counter / video_duration) * 60.0
             else:
-                # Fallback to real-time calculation
-                blink_rate = (self.blink_counter / elapsed_time) * 60.0
+                # Fallback to real-time calculation (prevent division by zero)
+                if elapsed_time > 0:
+                    blink_rate = (self.blink_counter / elapsed_time) * 60.0
+                else:
+                    blink_rate = 0.0
                 
             # Cap unreasonably high blink rates (normal human range is 15-30 blinks/min)
             blink_rate = min(blink_rate, 40.0)

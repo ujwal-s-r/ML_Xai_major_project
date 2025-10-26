@@ -3,4 +3,5 @@
 from .emotion_analyzer import EmotionAnalyzer
 from .blink_detector import BlinkDetector
 from .gaze_estimator import GazeEstimator
-from .iris_tracker import IrisTracker 
+from .iris_tracker import IrisTracker
+from .video_analyzer import VideoAnalyzer 

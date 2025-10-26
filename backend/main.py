@@ -278,6 +278,75 @@ async def submit_game(payload: GameSubmission):
     return {"saved": True, "server_summary": record.get("server_summary")}
 
 
+# ===================================
+# Video Analysis Endpoints
+# ===================================
+
+VIDEO_RESULTS_PATH = DATA_DIR / "video_results.jsonl"
+VIDEO_DIR = DATA_DIR / "video"
+VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class VideoSubmission(BaseModel):
+    """Video analysis submission with complete timeline and summary."""
+    session_id: str
+    trigger_video: str
+    duration_seconds: float
+    timeline: List[dict]  # Time-series data
+    summary: dict  # Aggregated metrics
+
+
+@app.get("/video")
+async def serve_video_page():
+    """Serve the video analysis page."""
+    video_html_path = FRONTEND_DIR / "video.html"
+    if not video_html_path.exists():
+        raise HTTPException(status_code=404, detail="video.html not found")
+    return FileResponse(video_html_path)
+
+
+@app.get("/api/video/trigger")
+async def get_trigger_video():
+    """Stream the trigger video file."""
+    video_path = VIDEO_DIR / "hack.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Trigger video not found")
+    return FileResponse(
+        video_path,
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes"}
+    )
+
+
+@app.post("/api/video/submit")
+async def submit_video_analysis(submission: VideoSubmission):
+    """
+    Submit video analysis results with timeline and summary.
+    Saves to video_results.jsonl for later processing.
+    """
+    record = {
+        "session_id": submission.session_id,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "trigger_video": submission.trigger_video,
+        "duration_seconds": submission.duration_seconds,
+        "timeline": submission.timeline,
+        "summary": submission.summary
+    }
+    
+    try:
+        with open(VIDEO_RESULTS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save video data: {e}")
+    
+    return {
+        "saved": True,
+        "session_id": submission.session_id,
+        "timeline_entries": len(submission.timeline),
+        "summary": submission.summary
+    }
+
+
 if __name__ == "__main__":
     # Optional: run with `python backend/main.py` for quick testing
     import uvicorn

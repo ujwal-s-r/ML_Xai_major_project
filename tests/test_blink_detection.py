@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import cv2
 import time
-from context.blink_detector import BlinkDetector
+from processors.blink_detector import BlinkDetector
 
 def test_blink_detector():
     """Test blink detection on live webcam"""
@@ -155,11 +155,13 @@ def test_blink_detector():
         elif key == ord('s'):
             # Snapshot analysis
             print("\n--- Snapshot Analysis ---")
-            result = detector.get_blink_statistics()
-            print(f"Total Blinks: {result.get('total_blinks', 0)}")
-            print(f"Blink Rate: {result.get('blink_rate', 0):.2f} blinks/sec")
-            print(f"Average EAR: {result.get('avg_ear', 0):.3f}")
-            print(f"Processing Time: {time.time() - start_time:.1f}s")
+            elapsed = time.time() - start_time
+            blink_rate = (detector.blink_counter / elapsed * 60.0) if elapsed > 0 else 0
+            avg_ear = sum(detector.ear_history) / len(detector.ear_history) if detector.ear_history else 0
+            print(f"Total Blinks: {detector.blink_counter}")
+            print(f"Blink Rate: {blink_rate:.2f} blinks/min")
+            print(f"Average EAR: {avg_ear:.3f}")
+            print(f"Processing Time: {elapsed:.1f}s")
             print("------------------------\n")
     
     # Cleanup
@@ -170,12 +172,14 @@ def test_blink_detector():
     print("\n" + "=" * 60)
     print("Final Statistics")
     print("=" * 60)
-    stats = detector.get_blink_statistics()
-    print(f"Total Blinks: {stats.get('total_blinks', 0)}")
+    elapsed = time.time() - start_time
+    blink_rate = (detector.blink_counter / elapsed * 60.0) if elapsed > 0 else 0
+    avg_ear = sum(detector.ear_history) / len(detector.ear_history) if detector.ear_history else 0
+    print(f"Total Blinks: {detector.blink_counter}")
     print(f"Total Frames: {frame_count}")
-    print(f"Duration: {time.time() - start_time:.1f}s")
-    print(f"Blink Rate: {stats.get('blink_rate', 0):.2f} blinks/second")
-    print(f"Average EAR: {stats.get('avg_ear', 0):.3f}")
+    print(f"Duration: {elapsed:.1f}s")
+    print(f"Blink Rate: {blink_rate:.2f} blinks/minute")
+    print(f"Average EAR: {avg_ear:.3f}")
     print("=" * 60)
     
     return True

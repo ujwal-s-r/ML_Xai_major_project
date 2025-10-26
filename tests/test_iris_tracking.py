@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import cv2
 import time
 import numpy as np
-from context.iris_tracker import IrisTracker
+from processors.iris_tracker import IrisTracker
 
 def test_iris_tracker():
     """Test iris tracking and pupil dilation on live webcam"""
@@ -110,12 +110,14 @@ def test_iris_tracker():
                         cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
                     
                     # Draw iris centers
-                    if result.get('left_iris_center'):
-                        lx, ly = result['left_iris_center']
+                    left_center = result.get('left_iris_center')
+                    if left_center is not None:
+                        lx, ly = left_center
                         cv2.circle(frame, (int(lx * w), int(ly * h)), 5, (0, 255, 255), -1)
                     
-                    if result.get('right_iris_center'):
-                        rx, ry = result['right_iris_center']
+                    right_center = result.get('right_iris_center')
+                    if right_center is not None:
+                        rx, ry = right_center
                         cv2.circle(frame, (int(rx * w), int(ry * h)), 5, (0, 255, 255), -1)
                 
                 # Display pupil information
@@ -214,7 +216,7 @@ def test_iris_tracker():
         elif key == ord('s'):
             # Snapshot analysis
             print("\n--- Snapshot Analysis ---")
-            stats = tracker.get_pupil_statistics()
+            stats = tracker.get_metrics()
             print(f"Average Pupil Size: {stats.get('avg_pupil_size', 0):.4f}")
             print(f"Max Pupil Size: {stats.get('max_pupil_size', 0):.4f}")
             print(f"Min Pupil Size: {stats.get('min_pupil_size', 0):.4f}")
@@ -224,7 +226,7 @@ def test_iris_tracker():
         elif key == ord('r'):
             # Reset baseline
             print("\nResetting baseline...")
-            tracker.reset_baseline()
+            tracker.reset()
             baseline_phase = True
             baseline_end_time = time.time() + 2.0
             pupil_size_history.clear()
@@ -238,7 +240,7 @@ def test_iris_tracker():
     print("\n" + "=" * 60)
     print("Final Statistics")
     print("=" * 60)
-    stats = tracker.get_pupil_statistics()
+    stats = tracker.get_metrics()
     print(f"Average Pupil Size: {stats.get('avg_pupil_size', 0):.4f}")
     print(f"Max Pupil Size: {stats.get('max_pupil_size', 0):.4f}")
     print(f"Min Pupil Size: {stats.get('min_pupil_size', 0):.4f}")
