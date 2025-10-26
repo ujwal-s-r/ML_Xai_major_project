@@ -6,6 +6,7 @@ Tests if the model works on Windows before integrating into the pipeline
 import cv2
 import numpy as np
 import torch
+import time
 from PIL import Image
 
 def test_l2cs_installation():
@@ -22,25 +23,42 @@ def test_l2cs_installation():
 def test_model_loading():
     """Test loading the L2CS-Net model"""
     try:
-        from l2cs import Pipeline
+        from l2cs import Pipeline, select_device
+        import pathlib
         
         # Initialize the pipeline (downloads weights on first run)
         print("\nInitializing L2CS-Net pipeline...")
+        
+        # Model weights path
+        CWD = pathlib.Path.cwd()
+        weights_path = CWD / 'models' / 'L2CSNet_gaze360.pkl'
+        
+        if not weights_path.exists():
+            print(f"✗ Model weights not found at: {weights_path}")
+            print("Please ensure models/L2CSNet_gaze360.pkl exists")
+            return None
+        
+        device = select_device('cpu', batch_size=1)
         gaze_pipeline = Pipeline(
-            weights='L2CSNet_gaze360.pkl',  # Pre-trained on Gaze360 dataset
+            weights=weights_path,
             arch='ResNet50',
-            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            device=device
         )
         
         device_name = "GPU (CUDA)" if torch.cuda.is_available() else "CPU"
         print(f"✓ Model loaded successfully on {device_name}")
+        print(f"✓ Weights loaded from: {weights_path}")
         return gaze_pipeline
     except Exception as e:
         print(f"✗ Model loading failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def test_webcam_gaze(gaze_pipeline):
     """Test gaze estimation on live webcam"""
+    from l2cs import render
+    
     print("\nTesting webcam gaze estimation...")
     print("Press 'q' to quit, 's' to take snapshot test")
     
@@ -52,81 +70,76 @@ def test_webcam_gaze(gaze_pipeline):
     
     frame_count = 0
     
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("✗ Failed to grab frame")
-            break
-        
-        frame_count += 1
-        
-        # Run gaze estimation every 5 frames (to reduce processing load)
-        if frame_count % 5 == 0:
+    with torch.no_grad():
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("✗ Failed to grab frame")
+                break
+            
+            frame_count += 1
+            start_time = time.time()
+            
             try:
-                # Convert BGR to RGB for the model
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # Process frame with L2CS-Net pipeline
+                results = gaze_pipeline.step(frame)
                 
-                # Run the pipeline
-                results = gaze_pipeline.step(frame_rgb)
+                # Visualize output using L2CS render function
+                frame = render(frame, results)
                 
-                # results contains: faces, pitch, yaw for each detected face
-                if results:
-                    for face_idx, (bbox, pitch, yaw) in enumerate(zip(
-                        results.get('bboxes', []),
-                        results.get('pitch', []),
-                        results.get('yaw', [])
-                    )):
-                        # Draw bounding box
-                        x1, y1, x2, y2 = map(int, bbox)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        
-                        # Determine gaze direction
-                        # Yaw: negative = looking left, positive = looking right
-                        # Pitch: negative = looking up, positive = looking down
-                        horizontal = "LEFT" if yaw < -15 else "RIGHT" if yaw > 15 else "CENTER"
-                        vertical = "UP" if pitch < -15 else "DOWN" if pitch > 15 else "CENTER"
-                        
-                        # Display gaze info
-                        text = f"Pitch: {pitch:.1f}, Yaw: {yaw:.1f}"
-                        direction = f"{vertical}-{horizontal}"
-                        
-                        cv2.putText(frame, text, (x1, y1 - 30), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                        cv2.putText(frame, direction, (x1, y1 - 10), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                        
-                        # Print to console occasionally
-                        if frame_count % 30 == 0:
-                            print(f"Face {face_idx + 1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}° ({direction})")
+                # Add FPS counter
+                fps = 1.0 / (time.time() - start_time) if time.time() - start_time > 0 else 0
+                cv2.putText(frame, f'FPS: {fps:.1f}', (10, 20), 
+                           cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 255, 0), 1, cv2.LINE_AA)
+                
+                # Print details occasionally
+                if frame_count % 30 == 0 and results:
+                    pitch_list = results.get('pitch', [])
+                    yaw_list = results.get('yaw', [])
+                    
+                    if pitch_list and yaw_list:
+                        for i, (pitch, yaw) in enumerate(zip(pitch_list, yaw_list)):
+                            horizontal = "LEFT" if yaw < -15 else "RIGHT" if yaw > 15 else "CENTER"
+                            vertical = "UP" if pitch < -15 else "DOWN" if pitch > 15 else "CENTER"
+                            print(f"Face {i+1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}° ({vertical}-{horizontal})")
                 
             except Exception as e:
                 print(f"Error processing frame: {e}")
-        
-        # Display
-        cv2.imshow('L2CS-Net Gaze Test (Press Q to quit)', frame)
-        
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("\n✓ Test completed successfully")
-            break
-        elif key == ord('s'):
-            # Snapshot test - detailed output
-            print("\n--- Snapshot Analysis ---")
-            try:
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = gaze_pipeline.step(frame_rgb)
-                
-                if results and results.get('bboxes'):
-                    print(f"Detected {len(results['bboxes'])} face(s)")
-                    for i, (pitch, yaw) in enumerate(zip(results['pitch'], results['yaw'])):
-                        print(f"  Face {i+1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}°")
-                        print(f"    Horizontal: {'LEFT' if yaw < -15 else 'RIGHT' if yaw > 15 else 'CENTER'}")
-                        print(f"    Vertical: {'UP' if pitch < -15 else 'DOWN' if pitch > 15 else 'CENTER'}")
-                else:
-                    print("No faces detected in snapshot")
-            except Exception as e:
-                print(f"Error in snapshot: {e}")
-            print("------------------------\n")
+                import traceback
+                traceback.print_exc()
+            
+            # Display
+            cv2.imshow('L2CS-Net Gaze Test (Press Q to quit)', frame)
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("\n✓ Test completed successfully")
+                break
+            elif key == ord('s'):
+                # Snapshot test - detailed output
+                print("\n--- Snapshot Analysis ---")
+                try:
+                    results = gaze_pipeline.step(frame)
+                    
+                    if results:
+                        pitch_list = results.get('pitch', [])
+                        yaw_list = results.get('yaw', [])
+                        
+                        if pitch_list and yaw_list:
+                            print(f"Detected {len(pitch_list)} face(s)")
+                            for i, (pitch, yaw) in enumerate(zip(pitch_list, yaw_list)):
+                                print(f"  Face {i+1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}°")
+                                print(f"    Horizontal: {'LEFT' if yaw < -15 else 'RIGHT' if yaw > 15 else 'CENTER'}")
+                                print(f"    Vertical: {'UP' if pitch < -15 else 'DOWN' if pitch > 15 else 'CENTER'}")
+                        else:
+                            print("No faces detected in snapshot")
+                    else:
+                        print("No results from pipeline")
+                except Exception as e:
+                    print(f"Error in snapshot: {e}")
+                    import traceback
+                    traceback.print_exc()
+                print("------------------------\n")
     
     cap.release()
     cv2.destroyAllWindows()

@@ -8,3 +8,5 @@ backend/data/*.jsonl
 backend/data/*.json
 .DS_Store
 Thumbs.db
+models/L2CSNet_gaze360.pkl
+backend/data/video/hack.mp4
