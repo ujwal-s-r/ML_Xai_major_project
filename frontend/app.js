@@ -77,6 +77,13 @@ function showResult(total, severity) {
   document.getElementById('score').textContent = String(total);
   document.getElementById('severity').textContent = severity;
   document.getElementById('result').classList.remove('hidden');
+  // enable next step to game
+  const next = document.getElementById('next-placeholder');
+  if (next) {
+    next.setAttribute('href', '/game');
+    next.removeAttribute('aria-disabled');
+    next.setAttribute('title', 'Start the mini game');
+  }
   window.scrollTo({ top: document.getElementById('result').offsetTop - 10, behavior: 'smooth' });
 }
 
