@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PHQ-8 Questionnaire</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>PHQ-8 Questionnaire</h1>
+    <p class="subtitle">Please answer the following 8 questions based on how you've felt over the last 2 weeks.</p>
+  </header>
+
+  <main>
+    <form id="phq8-form">
+      <ol class="questions">
+        <li>
+          <div class="q">Little interest or pleasure in doing things</div>
+          <div class="opts" data-q="1"></div>
+        </li>
+        <li>
+          <div class="q">Feeling down, depressed, or hopeless</div>
+          <div class="opts" data-q="2"></div>
+        </li>
+        <li>
+          <div class="q">Trouble falling or staying asleep, or sleeping too much</div>
+          <div class="opts" data-q="3"></div>
+        </li>
+        <li>
+          <div class="q">Feeling tired or having little energy</div>
+          <div class="opts" data-q="4"></div>
+        </li>
+        <li>
+          <div class="q">Poor appetite or overeating</div>
+          <div class="opts" data-q="5"></div>
+        </li>
+        <li>
+          <div class="q">Feeling bad about yourself — or that you are a failure or have let yourself or your family down</div>
+          <div class="opts" data-q="6"></div>
+        </li>
+        <li>
+          <div class="q">Trouble concentrating on things, such as reading the newspaper or watching television</div>
+          <div class="opts" data-q="7"></div>
+        </li>
+        <li>
+          <div class="q">Moving or speaking so slowly that other people could have noticed. Or the opposite — being so fidgety or restless that you have been moving around a lot more than usual</div>
+          <div class="opts" data-q="8"></div>
+        </li>
+      </ol>
+
+      <div class="actions">
+        <button type="submit" id="submit-btn">Submit</button>
+      </div>
+    </form>
+
+    <section id="result" class="hidden">
+      <h2>Your PHQ-8 Result</h2>
+      <p>Total score: <strong id="score">0</strong></p>
+      <p>Severity: <strong id="severity">-</strong></p>
+      <p class="note">This is not a diagnosis. If you have concerns, consider seeking professional help.</p>
+      <div class="next">
+        <a class="button secondary" id="next-placeholder" href="#" aria-disabled="true" title="Coming next">Next: Mini Game (soon)</a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>© 2025 PHQ-8 Demo</small>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
