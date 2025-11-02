@@ -588,6 +588,48 @@ async def get_video_summary(session_id: str):
     return latest
 
 
+@app.get("/api/video/frames/{session_id}/{stage}")
+async def get_video_frames(session_id: str, stage: str):
+    """Return per-frame JSON for a stage (blink|gaze|pupil|emotion) for the latest session run.
+    Uses the per_frame_path recorded in the combined video summary.
+    """
+    stage = stage.lower()
+    if stage not in {"blink", "gaze", "pupil", "emotion"}:
+        raise HTTPException(status_code=400, detail="Invalid stage")
+
+    summary = await get_video_summary(session_id)
+    per_stage = summary.get(stage) or {}
+    per_path = per_stage.get("per_frame_path")
+    if not per_path:
+        raise HTTPException(status_code=404, detail=f"No per-frame path for stage {stage}")
+
+    # Resolve and validate path inside temp dir
+    abs_path = Path(per_path)
+    if not abs_path.is_absolute():
+        abs_path = (BASE_DIR / per_path).resolve()
+    if not str(abs_path).startswith(str(TEMP_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Per-frame path not under temp dir")
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="Per-frame file not found")
+
+    # Read JSONL and return as JSON array
+    records = []
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read per-frame data: {e}")
+
+    return {"stage": stage, "count": len(records), "frames": records}
+
+
 if __name__ == "__main__":
     # Optional: run with `python backend/main.py` for quick testing
     import uvicorn

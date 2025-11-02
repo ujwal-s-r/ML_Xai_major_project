@@ -61,28 +61,55 @@ class VideoAnalyzer:
         )
         total = len(image_paths)
 
+        # Prepare per-frame JSONL output like other stages
+        per_frame_path = frames_dir / "blink_frames.jsonl"
         timeline: List[Dict[str, Any]] = []
-        for i, img_path in enumerate(image_paths, start=1):
-            frame = cv2.imread(str(img_path))
-            result = self.blink.detect_blink(frame)
-            timeline.append(
-                {
+        frames_with_face = 0
+
+        with open(per_frame_path, "w", encoding="utf-8") as pf:
+            for i, img_path in enumerate(image_paths, start=1):
+                frame = cv2.imread(str(img_path))
+                result = self.blink.detect_blink(frame)
+                success = bool(result.get("success"))
+                if success:
+                    frames_with_face += 1
+
+                # in-memory minimal timeline
+                timeline.append(
+                    {
+                        "frame_index": i,
+                        "file": img_path.name,
+                        "success": success,
+                        "avg_ear": result.get("avg_ear"),
+                        "blink_count": result.get("blink_count"),
+                    }
+                )
+
+                # Persist per-frame record for dashboard visualizations
+                rec = {
                     "frame_index": i,
                     "file": img_path.name,
-                    "success": bool(result.get("success")),
+                    "success": success,
+                    "left_ear": result.get("left_ear"),
+                    "right_ear": result.get("right_ear"),
                     "avg_ear": result.get("avg_ear"),
+                    "is_blinking": result.get("is_blinking"),
                     "blink_count": result.get("blink_count"),
+                    "ear_threshold": getattr(self.blink, "EAR_THRESHOLD", None),
                 }
-            )
-            if on_progress:
-                on_progress(Progress(stage="blink", processed=i, total=total))
+                pf.write(json.dumps(rec) + "\n")
+
+                if on_progress:
+                    on_progress(Progress(stage="blink", processed=i, total=total))
 
         # Build summary
         avg_ear_values = [t["avg_ear"] for t in timeline if t.get("avg_ear") is not None]
         summary = {
             "frames_processed": total,
+            "frames_with_face": frames_with_face,
             "total_blinks": int(self.blink.blink_counter),
             "avg_ear": float(sum(avg_ear_values) / len(avg_ear_values)) if avg_ear_values else None,
+            "per_frame_path": str(per_frame_path),
         }
 
         return {"timeline": timeline, "summary": summary}

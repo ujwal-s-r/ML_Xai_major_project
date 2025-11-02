@@ -20,8 +20,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     document.getElementById('sessionId').textContent = sessionId;
     
-    // Fetch data
+    // Fetch PHQ-8 & Game (existing)
     await loadData();
+    // Fetch Video summary + per-frame streams for real charts
+    await loadVideoData();
 });
 
 async function loadData() {
@@ -39,10 +41,9 @@ async function loadData() {
         document.getElementById('loadingSection').style.display = 'none';
         document.getElementById('dashboardContent').style.display = 'grid';
         
-        // Render all sections
-        renderPHQ8(data.phq8);
-        renderGame(data.game);
-        renderVideo(data.video);
+    // Render PHQ-8 and Game sections
+    renderPHQ8(data.phq8);
+    renderGame(data.game);
         
     } catch (error) {
         console.error('Error loading data:', error);
@@ -225,370 +226,181 @@ function renderGame(gameData) {
 }
 
 // ============================================
-// Video Rendering
+// Video Rendering (real per-frame data)
 // ============================================
 
-function renderVideo(videoData) {
-    if (!videoData) {
+let videoSummary = null;
+let blinkFrames = [];
+let gazeFrames = [];
+let pupilFrames = [];
+let emotionFrames = [];
+
+async function loadVideoData() {
+    try {
+        const sumRes = await fetch(`/api/video/summary/${encodeURIComponent(sessionId)}`);
+        if (!sumRes.ok) {
+            console.warn('No video summary for session');
+            return;
+        }
+        videoSummary = await sumRes.json();
+
+        // Fetch per-frame data for each stage
+        const [blinkRes, gazeRes, pupilRes, emotionRes] = await Promise.all([
+            fetch(`/api/video/frames/${encodeURIComponent(sessionId)}/blink`).catch(() => null),
+            fetch(`/api/video/frames/${encodeURIComponent(sessionId)}/gaze`).catch(() => null),
+            fetch(`/api/video/frames/${encodeURIComponent(sessionId)}/pupil`).catch(() => null),
+            fetch(`/api/video/frames/${encodeURIComponent(sessionId)}/emotion`).catch(() => null),
+        ]);
+
+        blinkFrames = blinkRes && blinkRes.ok ? (await blinkRes.json()).frames : [];
+        gazeFrames = gazeRes && gazeRes.ok ? (await gazeRes.json()).frames : [];
+        pupilFrames = pupilRes && pupilRes.ok ? (await pupilRes.json()).frames : [];
+        emotionFrames = emotionRes && emotionRes.ok ? (await emotionRes.json()).frames : [];
+
+        renderVideoSummary(videoSummary, { blinkFrames, gazeFrames, pupilFrames, emotionFrames });
+        renderEmotionTimelineFromFrames(emotionFrames);
+        renderBlinkTimelineFromFrames(blinkFrames);
+        renderPupilTimelineFromFrames(pupilFrames);
+        renderGazeTimelineFromFrames(gazeFrames);
+        renderEmotionDistributionFromSummary(videoSummary?.emotion);
+    } catch (e) {
+        console.warn('Video data load failed', e);
+    }
+}
+
+function renderVideoSummary(summary, frames) {
+    if (!summary) {
         document.getElementById('videoSection').innerHTML = '<div class="no-data">No video data available</div>';
         return;
     }
-    
-    const summary = videoData.server_summary || videoData.client_summary || {};
-    const timeline = videoData.timeline || [];
-    
-    // Update summary metrics
-    if (summary.emotion) {
-        document.getElementById('videoDominantEmotion').textContent = 
-            summary.emotion.dominant_emotion || '-';
-        document.getElementById('videoEmotionChanges').textContent = 
-            `${summary.emotion.emotion_changes || 0} changes`;
-    }
-    
-    if (summary.blink) {
-        document.getElementById('videoBlinkRate').textContent = 
-            summary.blink.blink_rate_per_minute || '-';
-    }
-    
-    if (summary.gaze) {
-        const attentionScore = summary.gaze.attention_score || 0;
-        document.getElementById('videoAttention').textContent = 
-            `${Math.round(attentionScore * 100)}%`;
-    }
-    
-    if (summary.pupil) {
-        document.getElementById('videoDilations').textContent = 
-            summary.pupil.pupil_dilation_events || 0;
-    }
-    
-    // Render time-series charts
-    renderEmotionTimeline(timeline);
-    renderBlinkTimeline(timeline);
-    renderPupilTimeline(timeline);
-    renderGazeTimeline(timeline);
-    renderEmotionDistribution(summary.emotion);
+    // Dominant emotion and changes
+    const domCounts = summary?.emotion?.dominant_counts || {};
+    const dominantEmotion = Object.entries(domCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '-';
+    document.getElementById('videoDominantEmotion').textContent = dominantEmotion;
+    // Count changes over emotionFrames dominant_emotion
+    const domSeq = (frames.emotionFrames || []).map(f => f.dominant_emotion).filter(Boolean);
+    let changes = 0; for (let i=1;i<domSeq.length;i++){ if (domSeq[i] !== domSeq[i-1]) changes++; }
+    document.getElementById('videoEmotionChanges').textContent = `${changes} changes`;
+
+    // Total blinks from blink summary
+    const totalBlinks = summary?.blink?.total_blinks ?? '-';
+    document.getElementById('videoTotalBlinks').textContent = totalBlinks;
+
+    // Attention center % from gaze distribution
+    const dist = summary?.gaze?.gaze_distribution || {};
+    const totalGaze = (dist.LEFT||0)+(dist.CENTER||0)+(dist.RIGHT||0);
+    const centerPct = totalGaze ? Math.round((dist.CENTER||0)/totalGaze*100) : 0;
+    document.getElementById('videoAttention').textContent = `${centerPct}%`;
+
+    // Avg pupil size from pupil summary
+    const avgPupil = summary?.pupil?.avg_pupil_size;
+    document.getElementById('videoAvgPupil').textContent = (avgPupil!=null)? avgPupil.toFixed(3): '-';
 }
 
-function renderEmotionTimeline(timeline) {
-    const emotionData = timeline
-        .filter(entry => entry.emotion)
-        .map(entry => ({
-            x: entry.timestamp,
-            emotion: entry.emotion.label,
-            confidence: entry.emotion.confidence
-        }));
-    
-    if (emotionData.length === 0) {
-        return;
-    }
-    
-    // Map emotions to numeric values for visualization
-    const emotionMap = {
-        'sad': 1,
-        'fear': 2,
-        'angry': 3,
-        'disgust': 4,
-        'surprise': 5,
-        'happy': 6,
-        'neutral': 7
-    };
-    
+function renderEmotionTimelineFromFrames(frames) {
+    if (!frames || !frames.length) return;
+    // Build stacked area of probabilities for classes present
+    const labels = frames.map(f => f.frame_index);
+    // Collect unique emotions across frames
+    const emoSet = new Set();
+    frames.forEach(f => { const em = f.emotions || {}; Object.keys(em).forEach(k=>emoSet.add(k)); });
+    const emotions = Array.from(emoSet);
+    const colors = ['#667eea','#764ba2','#f093fb','#f5576c','#4facfe','#43e97b','#38f9d7','#f59e0b','#10b981'];
+    const datasets = emotions.map((emo, idx) => ({
+        label: emo,
+        data: frames.map(f => (f.emotions && f.emotions[emo]!=null) ? Number(f.emotions[emo]) : 0),
+        borderColor: colors[idx % colors.length],
+        backgroundColor: colors[idx % colors.length] + '55',
+        fill: true,
+        tension: 0.1,
+        stack: 'emotions'
+    }));
+
     const ctx = document.getElementById('emotionTimelineChart').getContext('2d');
     charts.emotionTimeline = new Chart(ctx, {
         type: 'line',
-        data: {
-            datasets: [{
-                label: 'Emotion',
-                data: emotionData.map(d => ({
-                    x: d.x,
-                    y: emotionMap[d.emotion] || 0
-                })),
-                borderColor: '#667eea',
-                backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                stepped: true,
-                pointRadius: 4,
-                pointHoverRadius: 6
-            }]
-        },
+        data: { labels, datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const point = emotionData[context.dataIndex];
-                            return `${point.emotion} (${(point.confidence * 100).toFixed(1)}%)`;
-                        }
-                    }
-                }
-            },
+            plugins: { legend: { position: 'top' } },
             scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    min: 0,
-                    max: 8,
-                    ticks: {
-                        callback: function(value) {
-                            const reverseMap = {
-                                1: 'Sad',
-                                2: 'Fear',
-                                3: 'Angry',
-                                4: 'Disgust',
-                                5: 'Surprise',
-                                6: 'Happy',
-                                7: 'Neutral'
-                            };
-                            return reverseMap[value] || '';
-                        }
-                    }
-                }
+                x: { title: { display: true, text: 'Frame' } },
+                y: { title: { display: true, text: 'Emotion probability (%)' }, stacked: true, min: 0, max: 100 }
             }
         }
     });
 }
 
-function renderBlinkTimeline(timeline) {
-    const blinkData = timeline
-        .filter(entry => entry.blink)
-        .map(entry => ({
-            x: entry.timestamp,
-            y: entry.blink.cumulative_blinks || 0
-        }));
-    
-    if (blinkData.length === 0) {
-        return;
+function renderBlinkTimelineFromFrames(frames) {
+    if (!frames || !frames.length) return;
+    const labels = frames.map(f => f.frame_index);
+    const ear = frames.map(f => Number(f.avg_ear ?? 0));
+    // Blink events when blink_count increments
+    const events = [];
+    for (let i=1;i<frames.length;i++){
+        const prev = frames[i-1].blink_count||0; const curr = frames[i].blink_count||0;
+        if (curr>prev) events.push({x: frames[i].frame_index, y: Math.max(...ear)*1.05});
     }
-    
     const ctx = document.getElementById('blinkTimelineChart').getContext('2d');
     charts.blinkTimeline = new Chart(ctx, {
         type: 'line',
         data: {
-            datasets: [{
-                label: 'Cumulative Blinks',
-                data: blinkData,
-                borderColor: '#43e97b',
-                backgroundColor: 'rgba(67, 233, 123, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    beginAtZero: true,
-                    title: {
-                        display: true,
-                        text: 'Total Blinks'
-                    }
-                }
-            }
-        }
-    });
-}
-
-function renderPupilTimeline(timeline) {
-    const pupilData = timeline
-        .filter(entry => entry.pupil && entry.pupil.avg)
-        .map(entry => ({
-            x: entry.timestamp,
-            y: entry.pupil.avg
-        }));
-    
-    if (pupilData.length === 0) {
-        return;
-    }
-    
-    const ctx = document.getElementById('pupilTimelineChart').getContext('2d');
-    charts.pupilTimeline = new Chart(ctx, {
-        type: 'line',
-        data: {
-            datasets: [{
-                label: 'Pupil Size',
-                data: pupilData,
-                borderColor: '#f093fb',
-                backgroundColor: 'rgba(240, 147, 251, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    title: {
-                        display: true,
-                        text: 'Pupil Size (normalized)'
-                    }
-                }
-            }
-        }
-    });
-}
-
-function renderGazeTimeline(timeline) {
-    const gazeData = {
-        left: [],
-        center: [],
-        right: []
-    };
-    
-    timeline
-        .filter(entry => entry.gaze)
-        .forEach(entry => {
-            const direction = entry.gaze.direction;
-            gazeData.left.push({
-                x: entry.timestamp,
-                y: direction === 'left' ? 1 : 0
-            });
-            gazeData.center.push({
-                x: entry.timestamp,
-                y: direction === 'center' ? 1 : 0
-            });
-            gazeData.right.push({
-                x: entry.timestamp,
-                y: direction === 'right' ? 1 : 0
-            });
-        });
-    
-    if (gazeData.left.length === 0) {
-        return;
-    }
-    
-    const ctx = document.getElementById('gazeTimelineChart').getContext('2d');
-    charts.gazeTimeline = new Chart(ctx, {
-        type: 'line',
-        data: {
+            labels,
             datasets: [
-                {
-                    label: 'Left',
-                    data: gazeData.left,
-                    borderColor: '#f5576c',
-                    backgroundColor: 'rgba(245, 87, 108, 0.3)',
-                    fill: true,
-                    stepped: true
-                },
-                {
-                    label: 'Center',
-                    data: gazeData.center,
-                    borderColor: '#43e97b',
-                    backgroundColor: 'rgba(67, 233, 123, 0.3)',
-                    fill: true,
-                    stepped: true
-                },
-                {
-                    label: 'Right',
-                    data: gazeData.right,
-                    borderColor: '#4facfe',
-                    backgroundColor: 'rgba(79, 172, 254, 0.3)',
-                    fill: true,
-                    stepped: true
-                }
+                { label: 'EAR', data: ear, borderColor: '#43e97b', backgroundColor: 'rgba(67,233,123,0.1)', fill: true, tension: 0.2 },
+                { label: 'Blink', data: events, type: 'scatter', pointBackgroundColor: '#f5576c', pointRadius: 4, showLine: false }
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: true
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    beginAtZero: true,
-                    max: 1,
-                    ticks: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'Gaze Direction'
-                    }
-                }
-            }
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: true } },
+            scales: { x: { title: { display: true, text: 'Frame' } }, y: { title: { display: true, text: 'EAR' } } }
         }
     });
 }
 
-function renderEmotionDistribution(emotionSummary) {
-    if (!emotionSummary || !emotionSummary.distribution) {
-        return;
-    }
-    
-    const distribution = emotionSummary.distribution;
+function renderPupilTimelineFromFrames(frames) {
+    if (!frames || !frames.length) return;
+    const labels = frames.map(f => f.frame_index);
+    const sizes = frames.map(f => Number(f.avg_pupil_size ?? 0));
+    const ctx = document.getElementById('pupilTimelineChart').getContext('2d');
+    charts.pupilTimeline = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Pupil Size', data: sizes, borderColor: '#f093fb', backgroundColor: 'rgba(240,147,251,0.1)', fill: true, tension: 0.3 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'Frame' } }, y: { title: { display: true, text: 'Pupil Size (normalized)' } } } }
+    });
+}
+
+function renderGazeTimelineFromFrames(frames) {
+    if (!frames || !frames.length) return;
+    const labels = frames.map(f => f.frame_index);
+    const left = frames.map(f => (f.label==='LEFT'?1:0));
+    const center = frames.map(f => (f.label==='CENTER'?1:0));
+    const right = frames.map(f => (f.label==='RIGHT'?1:0));
+    const ctx = document.getElementById('gazeTimelineChart').getContext('2d');
+    charts.gazeTimeline = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [
+            { label: 'Left', data: left, borderColor:'#f5576c', backgroundColor:'rgba(245,87,108,0.3)', fill:true, stepped:true },
+            { label: 'Center', data: center, borderColor:'#43e97b', backgroundColor:'rgba(67,233,123,0.3)', fill:true, stepped:true },
+            { label: 'Right', data: right, borderColor:'#4facfe', backgroundColor:'rgba(79,172,254,0.3)', fill:true, stepped:true }
+        ]},
+        options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:true } }, scales:{ x:{ title:{ display:true, text:'Frame' } }, y:{ beginAtZero:true, max:1, ticks:{ display:false }, title:{ display:true, text:'Gaze Direction' } } } }
+    });
+}
+
+function renderEmotionDistributionFromSummary(emotionSummary) {
+    if (!emotionSummary || !emotionSummary.dominant_counts) return;
+    const distribution = emotionSummary.dominant_counts;
     const emotions = Object.keys(distribution);
     const counts = Object.values(distribution);
-    
     const ctx = document.getElementById('emotionDistributionChart').getContext('2d');
     charts.emotionDistribution = new Chart(ctx, {
         type: 'doughnut',
-        data: {
-            labels: emotions.map(e => e.charAt(0).toUpperCase() + e.slice(1)),
-            datasets: [{
-                data: counts,
-                backgroundColor: [
-                    '#667eea',
-                    '#764ba2',
-                    '#f093fb',
-                    '#f5576c',
-                    '#4facfe',
-                    '#43e97b',
-                    '#38f9d7'
-                ]
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'right'
-                }
-            }
-        }
+        data: { labels: emotions.map(cap), datasets: [{ data: counts, backgroundColor: ['#667eea','#764ba2','#f093fb','#f5576c','#4facfe','#43e97b','#38f9d7'] }] },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right' } } }
     });
 }
+
+function cap(e){ return e.charAt(0).toUpperCase()+e.slice(1); }
