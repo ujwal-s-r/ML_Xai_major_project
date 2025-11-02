@@ -23,6 +23,10 @@ def test_blink_detector():
     try:
         detector = BlinkDetector()
         print("✓ BlinkDetector initialized successfully")
+        # Increase EAR threshold for this test to make blink detection more sensitive
+        # Default is 0.20; raising to ~0.24 helps detect blinks on some webcams/faces
+        detector.EAR_THRESHOLD = 0.24
+        print(f"✓ EAR threshold set to: {detector.EAR_THRESHOLD}")
     except Exception as e:
         print(f"✗ Failed to initialize: {e}")
         import traceback

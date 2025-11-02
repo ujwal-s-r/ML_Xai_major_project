@@ -94,8 +94,13 @@ def test_webcam_gaze(gaze_pipeline):
                 
                 # Print details occasionally
                 if frame_count % 30 == 0 and results:
-                    pitch_list = results.get('pitch', [])
-                    yaw_list = results.get('yaw', [])
+                    # Support both dict-like and object-like results containers
+                    if isinstance(results, dict):
+                        pitch_list = results.get('pitch', [])
+                        yaw_list = results.get('yaw', [])
+                    else:
+                        pitch_list = getattr(results, 'pitch', [])
+                        yaw_list = getattr(results, 'yaw', [])
                     
                     if pitch_list and yaw_list:
                         for i, (pitch, yaw) in enumerate(zip(pitch_list, yaw_list)):
@@ -122,8 +127,12 @@ def test_webcam_gaze(gaze_pipeline):
                     results = gaze_pipeline.step(frame)
                     
                     if results:
-                        pitch_list = results.get('pitch', [])
-                        yaw_list = results.get('yaw', [])
+                        if isinstance(results, dict):
+                            pitch_list = results.get('pitch', [])
+                            yaw_list = results.get('yaw', [])
+                        else:
+                            pitch_list = getattr(results, 'pitch', [])
+                            yaw_list = getattr(results, 'yaw', [])
                         
                         if pitch_list and yaw_list:
                             print(f"Detected {len(pitch_list)} face(s)")
@@ -167,12 +176,24 @@ def test_static_image(gaze_pipeline, image_path=None):
         # Run pipeline
         results = gaze_pipeline.step(img_rgb)
         
-        if results and results.get('bboxes'):
-            print(f"✓ Detected {len(results['bboxes'])} face(s)")
-            for i, (pitch, yaw) in enumerate(zip(results['pitch'], results['yaw'])):
-                print(f"  Face {i+1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}°")
+        if results:
+            if isinstance(results, dict):
+                bboxes = results.get('bboxes', [])
+                pitch_list = results.get('pitch', [])
+                yaw_list = results.get('yaw', [])
+            else:
+                bboxes = getattr(results, 'bboxes', [])
+                pitch_list = getattr(results, 'pitch', [])
+                yaw_list = getattr(results, 'yaw', [])
+            
+            if bboxes is not None and len(pitch_list) > 0:
+                print(f"✓ Detected {len(pitch_list)} face(s)")
+                for i, (pitch, yaw) in enumerate(zip(pitch_list, yaw_list)):
+                    print(f"  Face {i+1}: Pitch={pitch:.2f}°, Yaw={yaw:.2f}°")
+            else:
+                print("✗ No faces detected in image")
         else:
-            print("✗ No faces detected in image")
+            print("✗ No results from pipeline")
         
         return True
     except Exception as e:
