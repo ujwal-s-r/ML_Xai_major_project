@@ -263,6 +263,7 @@ async function loadVideoData() {
         renderPupilTimelineFromFrames(pupilFrames);
         renderGazeTimelineFromFrames(gazeFrames);
         renderEmotionDistributionFromSummary(videoSummary?.emotion);
+        renderCombinedTimelineFromFrames({ blinkFrames, gazeFrames, pupilFrames });
     } catch (e) {
         console.warn('Video data load failed', e);
     }
@@ -404,3 +405,61 @@ function renderEmotionDistributionFromSummary(emotionSummary) {
 }
 
 function cap(e){ return e.charAt(0).toUpperCase()+e.slice(1); }
+
+function renderCombinedTimelineFromFrames({ blinkFrames, gazeFrames, pupilFrames }) {
+    const allIdx = new Set();
+    (blinkFrames||[]).forEach(f=>allIdx.add(f.frame_index));
+    (gazeFrames||[]).forEach(f=>allIdx.add(f.frame_index));
+    (pupilFrames||[]).forEach(f=>allIdx.add(f.frame_index));
+    const frames = Array.from(allIdx).sort((a,b)=>a-b);
+    if (!frames.length) return;
+
+    const blinkMap = new Map((blinkFrames||[]).map(f=>[f.frame_index,f]));
+    const gazeMap = new Map((gazeFrames||[]).map(f=>[f.frame_index,f]));
+    const pupilMap = new Map((pupilFrames||[]).map(f=>[f.frame_index,f]));
+
+    const pupil = frames.map(i => {
+        const f = pupilMap.get(i); return f && f.avg_pupil_size!=null ? Number(f.avg_pupil_size) : null;
+    });
+    const ear = frames.map(i => {
+        const f = blinkMap.get(i); return f && f.avg_ear!=null ? Number(f.avg_ear) : null;
+    });
+    const gazeCode = frames.map(i => {
+        const f = gazeMap.get(i); const lab = f?.label; return lab==='LEFT'?-1: lab==='CENTER'?0: lab==='RIGHT'?1: null;
+    });
+    // Blink events
+    const blinkEvents = [];
+    for (let k=1;k<frames.length;k++){
+        const prev = blinkMap.get(frames[k-1]);
+        const curr = blinkMap.get(frames[k]);
+        const prevC = prev?.blink_count||0; const currC = curr?.blink_count||0;
+        if (currC>prevC) {
+            const yMax = Math.max(...pupil.filter(v=>v!=null), ...ear.filter(v=>v!=null));
+            blinkEvents.push({ x: k, y: (isFinite(yMax)? yMax*1.05 : 1) });
+        }
+    }
+
+    const ctx = document.getElementById('combinedChart').getContext('2d');
+    charts.combined = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: frames,
+            datasets: [
+                { label: 'Pupil Size', data: pupil, spanGaps: true, borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', tension: 0.25, fill: true, yAxisID: 'y' },
+                { label: 'EAR', data: ear, spanGaps: true, borderColor: '#10b981', backgroundColor: '#10b98122', tension: 0.2, fill: false, yAxisID: 'y' },
+                { label: 'Gaze (-1 L, 0 C, 1 R)', data: gazeCode, spanGaps: true, borderColor: '#3b82f6', backgroundColor: '#3b82f633', stepped: true, fill: true, yAxisID: 'y1' },
+                { label: 'Blink', data: blinkEvents, type: 'scatter', pointBackgroundColor: '#ef4444', pointBorderColor: '#ef4444', pointRadius: 3, showLine: false, yAxisID: 'y' }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                y: { title: { display: true, text: 'Pupil / EAR' }, beginAtZero: true },
+                y1: { position: 'right', title: { display: true, text: 'Gaze Code' }, suggestedMin: -1.2, suggestedMax: 1.2,
+                    ticks: { callback: (v)=> v===-1? 'Left' : v===0? 'Center' : v===1? 'Right' : '' } }
+            }
+        }
+    });
+}
