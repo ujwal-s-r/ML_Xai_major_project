@@ -25,6 +25,7 @@ VIDEO_DIR = DATA_DIR / "video"
 TEMP_DIR = DATA_DIR / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_PATH = DATA_DIR / "phq8_results.jsonl"
+VIDEO_RESULTS_PATH = DATA_DIR / "video_results.jsonl"
 VIDEO_STATUS: dict[str, dict] = {}
 
 app = FastAPI(title="PHQ-8 Questionnaire Service")
@@ -74,6 +75,11 @@ def phq8_severity(total: int) -> str:
 
 def append_result(record: dict) -> None:
     with open(RESULTS_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def append_video_result(record: dict) -> None:
+    with open(VIDEO_RESULTS_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
@@ -409,23 +415,42 @@ def _run_processing(session_id: str, frames_dir: Path):
         total_gaze = gaze_res["summary"].get("frames_processed", 0)
         _update_status(session_id, "gaze", total_gaze, total_gaze, state="done")
 
+        # Pupil stage
+        _update_status(session_id, "pupil", 0, 0, state="running")
+        pupil_res = analyzer.process_frames_pupil(frames_dir, on_progress=on_progress)
+        total_pupil = pupil_res["summary"].get("frames_processed", 0)
+        _update_status(session_id, "pupil", total_pupil, total_pupil, state="done")
+
+        # Build combined summary record
+        combined = {
+            "type": "video",
+            "session_id": session_id,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "blink": blink_res.get("summary", {}),
+            "gaze": gaze_res.get("summary", {}),
+            "pupil": pupil_res.get("summary", {}),
+            "version": 1,
+        }
+
         # Print combined JSON summary to terminal for review
         try:
-            print(json.dumps({
-                "type": "processing_summary",
-                "session_id": session_id,
-                "blink": blink_res.get("summary", {}),
-                "gaze": gaze_res.get("summary", {}),
-            }, ensure_ascii=False))
+            print(json.dumps(combined, ensure_ascii=False))
         except Exception:
             # Printing failures should not break processing
             pass
 
+        # Persist combined summary to video_results.jsonl for later dashboarding
+        try:
+            append_video_result(combined)
+        except Exception as e:
+            # Do not fail processing if persistence fails; log in server stdout
+            print(f"Failed to persist video summary: {e}")
+
         # All done
         VIDEO_STATUS[session_id] = {
             "stage": "done",
-            "processed": total_gaze,
-            "total": total_gaze,
+            "processed": total_pupil,
+            "total": total_pupil,
             "state": "done",
             "time": datetime.utcnow().isoformat() + "Z",
         }

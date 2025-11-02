@@ -8,7 +8,8 @@ from typing import Callable, Dict, List, Any
 import cv2
 
 from .blink_detector import BlinkDetector
-from .l2cs_gaze_tracker import L2CSGazeTracker
+from .gaze_percentile_estimator import GazePercentileEstimator, GazePercentileConfig
+from .iris_tracker import IrisTracker
 
 
 @dataclass
@@ -26,14 +27,20 @@ class VideoAnalyzer:
 
     def __init__(self):
         self.blink = BlinkDetector()
+        # Initialize new horizontal-only gaze estimator (percentile method)
         try:
-            self.gaze = L2CSGazeTracker()
-        except Exception as e:
-            # Defer error until gaze stage; blink can still run
-            self.gaze = None  # type: ignore
-            self._gaze_error = e
-        else:
+            self.gaze_pct = GazePercentileEstimator(GazePercentileConfig())
             self._gaze_error = None
+        except Exception as e:
+            self.gaze_pct = None  # type: ignore
+            self._gaze_error = e
+        # Iris tracker for pupil dilation
+        try:
+            self.iris = IrisTracker()
+            self._iris_error = None
+        except Exception as e:
+            self.iris = None  # type: ignore
+            self._iris_error = e
 
     def process_frames_blink(
         self,
@@ -77,49 +84,148 @@ class VideoAnalyzer:
         frames_dir: Path,
         on_progress: Callable[[Progress], None] | None = None,
     ) -> Dict[str, Any]:
-        if self.gaze is None:
+        if self.gaze_pct is None:
             raise RuntimeError(f"Gaze tracker not available: {self._gaze_error}")
         frames_dir = Path(frames_dir)
         image_paths: List[Path] = sorted(p for p in frames_dir.glob("*.jpg"))
         total = len(image_paths)
 
+        # Prepare per-frame JSONL output next to frames directory
+        out_dir = frames_dir
+        per_frame_path = out_dir / "gaze_frames.jsonl"
+        # Reset estimator state
+        self.gaze_pct.reset()
+
         timeline: List[Dict[str, Any]] = []
         counts = {"LEFT": 0, "CENTER": 0, "RIGHT": 0}
-        for i, img_path in enumerate(image_paths, start=1):
-            frame = cv2.imread(str(img_path))
-            result = self.gaze.detect_gaze(frame)
-            if result.get("success"):
-                dirc = result.get("direction") or "CENTER"
-                counts[dirc] = counts.get(dirc, 0) + 1
-            timeline.append(
-                {
+        frames_with_face = 0
+
+        with open(per_frame_path, "w", encoding="utf-8") as pf:
+            for i, img_path in enumerate(image_paths, start=1):
+                frame = cv2.imread(str(img_path))
+                metrics = self.gaze_pct.analyze_frame(frame)
+
+                # Update counts
+                label = metrics.get("label") or "N/A"
+                if metrics.get("face_detected"):
+                    frames_with_face += 1
+                if label in counts:
+                    counts[label] += 1
+
+                # Minimal timeline entry for debugging
+                timeline.append({
                     "frame_index": i,
                     "file": img_path.name,
-                    "success": bool(result.get("success")),
-                    "pitch": result.get("pitch"),
-                    "yaw": result.get("yaw"),
-                    "direction": result.get("direction"),
-                    "vertical": result.get("vertical"),
-                }
-            )
-            if on_progress:
-                on_progress(Progress(stage="gaze", processed=i, total=total))
+                    "success": bool(metrics.get("success")),
+                    "label": label,
+                    "confidence": metrics.get("confidence"),
+                })
 
-        total_success = sum(1 for t in timeline if t.get("success"))
+                # Persist per-frame JSONL for future visualization
+                rec = {
+                    "frame_index": i,
+                    "file": img_path.name,
+                    "face_detected": bool(metrics.get("face_detected")),
+                    "eyes_detected": bool(metrics.get("eyes_detected")),
+                    "label": label,
+                    "confidence": metrics.get("confidence"),
+                    "avg_left_perc": metrics.get("avg_left_perc"),
+                    "avg_right_perc": metrics.get("avg_right_perc"),
+                    "left_eye_roi_abs": metrics.get("left_eye_roi_abs"),
+                    "right_eye_roi_abs": metrics.get("right_eye_roi_abs"),
+                    "left_pupil_abs": metrics.get("left_pupil_abs"),
+                    "right_pupil_abs": metrics.get("right_pupil_abs"),
+                    "debug": metrics.get("debug"),
+                }
+                pf.write(json.dumps(rec) + "\n")
+
+                if on_progress:
+                    on_progress(Progress(stage="gaze", processed=i, total=total))
+
         summary = {
             "frames_processed": total,
-            "frames_with_face": total_success,
+            "frames_with_face": frames_with_face,
             "gaze_distribution": counts,
+            "per_frame_path": str(per_frame_path),
+        }
+        return {"timeline": timeline, "summary": summary}
+
+    def process_frames_pupil(
+        self,
+        frames_dir: Path,
+        on_progress: Callable[[Progress], None] | None = None,
+    ) -> Dict[str, Any]:
+        if self.iris is None:
+            raise RuntimeError(f"Iris tracker not available: {self._iris_error}")
+        frames_dir = Path(frames_dir)
+        image_paths: List[Path] = sorted(p for p in frames_dir.glob("*.jpg"))
+        total = len(image_paths)
+
+        per_frame_path = frames_dir / "pupil_frames.jsonl"
+        # reset metrics
+        self.iris.reset()
+
+        frames_with_iris = 0
+        timeline: List[Dict[str, Any]] = []
+
+        with open(per_frame_path, "w", encoding="utf-8") as pf:
+            for i, img_path in enumerate(image_paths, start=1):
+                frame = cv2.imread(str(img_path))
+                metrics = self.iris.detect_iris(frame)
+                success = bool(metrics.get("success"))
+                if success:
+                    frames_with_iris += 1
+
+                # Minimal timeline
+                timeline.append({
+                    "frame_index": i,
+                    "file": img_path.name,
+                    "success": success,
+                    "avg_pupil_size": metrics.get("avg_pupil_size"),
+                    "pupil_dilation_ratio": metrics.get("pupil_dilation_ratio"),
+                })
+
+                # Persist per-frame JSONL
+                rec = {
+                    "frame_index": i,
+                    "file": img_path.name,
+                    "success": success,
+                    "left_pupil_size": metrics.get("left_pupil_size"),
+                    "right_pupil_size": metrics.get("right_pupil_size"),
+                    "avg_pupil_size": metrics.get("avg_pupil_size"),
+                    "left_iris_center": metrics.get("left_iris_center"),
+                    "right_iris_center": metrics.get("right_iris_center"),
+                    "pupil_dilation_ratio": metrics.get("pupil_dilation_ratio"),
+                    "baseline_locked": metrics.get("baseline_locked"),
+                    "baseline_pupil_size": metrics.get("baseline_pupil_size"),
+                }
+                pf.write(json.dumps(rec) + "\n")
+
+                if on_progress:
+                    on_progress(Progress(stage="pupil", processed=i, total=total))
+
+        # Summary stats
+        stats = self.iris.get_metrics()
+        summary = {
+            "frames_processed": total,
+            "frames_with_iris": frames_with_iris,
+            "avg_pupil_size": stats.get("avg_pupil_size"),
+            "min_pupil_size": stats.get("min_pupil_size"),
+            "max_pupil_size": stats.get("max_pupil_size"),
+            "baseline_pupil_size": stats.get("baseline_pupil_size"),
+            "per_frame_path": str(per_frame_path),
         }
         return {"timeline": timeline, "summary": summary}
 
     def process_pipeline(self, frames_dir: Path, on_progress: Callable[[Progress], None] | None = None) -> Dict[str, Any]:
         blink = self.process_frames_blink(frames_dir, on_progress)
         gaze = self.process_frames_gaze(frames_dir, on_progress)
+        pupil = self.process_frames_pupil(frames_dir, on_progress)
         # Print combined JSON for terminal review
         print(json.dumps({
             "type": "processing_summary",
             "blink": blink["summary"],
             "gaze": gaze["summary"],
+            "pupil": pupil["summary"],
         }, ensure_ascii=False))
-        return {"blink": blink, "gaze": gaze}
+        return {"blink": blink, "gaze": gaze, "pupil": pupil}
