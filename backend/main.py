@@ -390,21 +390,48 @@ def _update_status(session_id: str, stage: str, processed: int, total: int, stat
     }
 
 
-def _run_blink_processing(session_id: str, frames_dir: Path):
+def _run_processing(session_id: str, frames_dir: Path):
     analyzer = VideoAnalyzer()
 
     def on_progress(progress):
         _update_status(session_id, progress.stage, progress.processed, progress.total)
 
     try:
+        # Blink stage
         _update_status(session_id, "blink", 0, 0, state="running")
-        res = analyzer.process_frames(frames_dir, on_progress=on_progress)
-        # Mark done
-        total = res["summary"].get("frames_processed", 0)
-        _update_status(session_id, "blink", total, total, state="done")
+        blink_res = analyzer.process_frames_blink(frames_dir, on_progress=on_progress)
+        total_blink = blink_res["summary"].get("frames_processed", 0)
+        _update_status(session_id, "blink", total_blink, total_blink, state="done")
+
+        # Gaze stage
+        _update_status(session_id, "gaze", 0, 0, state="running")
+        gaze_res = analyzer.process_frames_gaze(frames_dir, on_progress=on_progress)
+        total_gaze = gaze_res["summary"].get("frames_processed", 0)
+        _update_status(session_id, "gaze", total_gaze, total_gaze, state="done")
+
+        # Print combined JSON summary to terminal for review
+        try:
+            print(json.dumps({
+                "type": "processing_summary",
+                "session_id": session_id,
+                "blink": blink_res.get("summary", {}),
+                "gaze": gaze_res.get("summary", {}),
+            }, ensure_ascii=False))
+        except Exception:
+            # Printing failures should not break processing
+            pass
+
+        # All done
+        VIDEO_STATUS[session_id] = {
+            "stage": "done",
+            "processed": total_gaze,
+            "total": total_gaze,
+            "state": "done",
+            "time": datetime.utcnow().isoformat() + "Z",
+        }
     except Exception as e:
         VIDEO_STATUS[session_id] = {
-            "stage": "blink",
+            "stage": VIDEO_STATUS.get(session_id, {}).get("stage", "blink"),
             "processed": 0,
             "total": 0,
             "state": "error",
@@ -423,7 +450,7 @@ async def start_video_processing(background_tasks: BackgroundTasks, session_id: 
         raise HTTPException(status_code=404, detail="frames_dir not found")
 
     # Start background task
-    background_tasks.add_task(_run_blink_processing, session_id, frames_path)
+    background_tasks.add_task(_run_processing, session_id, frames_path)
     _update_status(session_id, "blink", 0, 0, state="running")
     return {"started": True}
 
