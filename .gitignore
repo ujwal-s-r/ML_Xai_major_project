@@ -10,3 +10,4 @@ backend/data/*.json
 Thumbs.db
 models/L2CSNet_gaze360.pkl
 backend/data/video/hack.mp4
+backend/data/temp

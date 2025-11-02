@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Video Analysis</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    .container { max-width: 960px; margin: 16px auto; padding: 0 16px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .actions { display:flex; gap:12px; align-items:center; }
+    .status { font-size: 0.95rem; color:#334155; margin-top: 8px; min-height: 1.2em; }
+    video { width: 100%; border-radius: 10px; background: #000; }
+    #webcamPreview { width: 220px; height: 124px; object-fit: cover; border: 2px solid #94a3b8; border-radius: 8px; }
+    .row { display:flex; gap:16px; align-items:flex-start; flex-wrap: wrap; }
+    .pill { background:#eef2ff; border:1px solid #c7d2fe; padding:6px 10px; border-radius:999px; }
+    .muted { color:#64748b; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Video Analysis</h1>
+    <p class="subtitle">We'll play a short video in fullscreen and record your webcam simultaneously. When the video ends, recording stops automatically.</p>
+  </header>
+
+  <main class="container">
+    <div class="grid">
+      <section class="card">
+        <h2>Instructions</h2>
+        <ul>
+          <li>Click "Start" to begin. We'll ask for webcam permission.</li>
+          <li>The trigger video will open fullscreen. Please keep your face visible.</li>
+          <li>When the video ends, fullscreen will close automatically and we will upload your recording for processing.</li>
+        </ul>
+        <div class="actions" style="margin-top:12px;">
+          <button id="startBtn">Start</button>
+          <a class="button secondary" href="/">Back</a>
+          <span class="pill">Session: <span id="sessionId">-</span></span>
+        </div>
+        <div id="status" class="status muted">Idle</div>
+      </section>
+
+      <section class="card">
+        <h2>Preview</h2>
+        <div class="row">
+          <div>
+            <div class="muted" style="margin-bottom:6px;">Trigger Video (goes fullscreen on start)</div>
+            <video id="triggerVideo" preload="metadata" playsinline></video>
+          </div>
+          <div>
+            <div class="muted" style="margin-bottom:6px;">Webcam Preview</div>
+            <video id="webcamPreview" muted autoplay playsinline></video>
+          </div>
+        </div>
+      </section>
+
+      <section id="resultCard" class="card hidden">
+        <h2>Upload & Extraction Result</h2>
+        <div id="resultJson" class="muted" style="white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <small>© 2025 Video Analysis</small>
+  </footer>
+
+  <script src="/static/video.js"></script>
+</body>
+</html>

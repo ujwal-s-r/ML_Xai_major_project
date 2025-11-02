@@ -6,11 +6,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, HTTPException, Response
+import cv2
+from fastapi import FastAPI, HTTPException, Response, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
+from processors.video_analyzer import VideoAnalyzer
 
 # Note: Video processing has been temporarily removed/reworked. No processors are imported.
 
@@ -19,7 +21,11 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATA_DIR = BASE_DIR / "backend" / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_DIR = DATA_DIR / "video"
+TEMP_DIR = DATA_DIR / "temp"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_PATH = DATA_DIR / "phq8_results.jsonl"
+VIDEO_STATUS: dict[str, dict] = {}
 
 app = FastAPI(title="PHQ-8 Questionnaire Service")
 
@@ -85,6 +91,24 @@ async def game_page() -> FileResponse:
     if not game_path.exists():
         raise HTTPException(status_code=500, detail="Game page not found")
     return FileResponse(str(game_path))
+
+
+@app.get("/video")
+async def video_page() -> FileResponse:
+    """Serve the Video Analysis page."""
+    video_page_path = FRONTEND_DIR / "video.html"
+    if not video_page_path.exists():
+        raise HTTPException(status_code=500, detail="Video page not found")
+    return FileResponse(str(video_page_path))
+
+
+@app.get("/api/video/trigger")
+async def get_trigger_video() -> FileResponse:
+    """Stream the trigger video file to the client."""
+    video_path = VIDEO_DIR / "hack.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Trigger video not found")
+    return FileResponse(str(video_path), media_type="video/mp4")
 
 
 @app.get("/api/health")
@@ -282,7 +306,134 @@ async def submit_game(payload: GameSubmission):
     return {"saved": True, "server_summary": record.get("server_summary")}
 
 
-# Video-related endpoints removed
+def _safe_filename(name: str) -> str:
+    return "".join(c for c in name if c.isalnum() or c in ("-", "_", ".")).strip()
+
+
+@app.post("/api/video/upload")
+async def upload_webcam_video(
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """Accept a recorded webcam video, save to temp, and extract frames.
+
+    Returns JSON with frame count, fps, duration, and relative paths.
+    """
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    session_dir_name = f"{_safe_filename(session_id)}_{ts}"
+    out_dir = TEMP_DIR / session_dir_name
+    frames_dir = out_dir / "frames"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine extension
+    orig_name = (file.filename or "webcam.webm")
+    ext = orig_name.split(".")[-1].lower() if "." in orig_name else "webm"
+    if ext not in {"webm", "mp4", "mkv", "avi", "mov"}:
+        ext = "webm"
+    video_path = out_dir / f"webcam_recording.{ext}"
+
+    # Save upload to disk in chunks
+    try:
+        with open(video_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    finally:
+        await file.close()
+
+    # Extract frames with OpenCV
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        try:
+            video_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail="Uploaded video could not be opened")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    reported_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    count = 0
+    ok, frame = cap.read()
+    while ok:
+        count += 1
+        fname = frames_dir / f"frame_{count:06d}.jpg"
+        cv2.imwrite(str(fname), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        ok, frame = cap.read()
+    cap.release()
+
+    duration = (reported_total / fps) if fps and reported_total else None
+
+    return JSONResponse(
+        {
+            "session_id": session_id,
+            "saved_video": str(video_path.relative_to(BASE_DIR)),
+            "frames_dir": str(frames_dir.relative_to(BASE_DIR)),
+            "total_frames": count or reported_total,
+            "reported_total_frames": reported_total,
+            "fps": fps,
+            "duration_seconds": duration,
+            "message": "Upload received and frames extracted",
+        }
+    )
+
+
+def _update_status(session_id: str, stage: str, processed: int, total: int, state: str = "running"):
+    VIDEO_STATUS[session_id] = {
+        "stage": stage,
+        "processed": processed,
+        "total": total,
+        "state": state,
+        "time": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _run_blink_processing(session_id: str, frames_dir: Path):
+    analyzer = VideoAnalyzer()
+
+    def on_progress(progress):
+        _update_status(session_id, progress.stage, progress.processed, progress.total)
+
+    try:
+        _update_status(session_id, "blink", 0, 0, state="running")
+        res = analyzer.process_frames(frames_dir, on_progress=on_progress)
+        # Mark done
+        total = res["summary"].get("frames_processed", 0)
+        _update_status(session_id, "blink", total, total, state="done")
+    except Exception as e:
+        VIDEO_STATUS[session_id] = {
+            "stage": "blink",
+            "processed": 0,
+            "total": 0,
+            "state": "error",
+            "error": str(e),
+            "time": datetime.utcnow().isoformat() + "Z",
+        }
+
+
+@app.post("/api/video/process")
+async def start_video_processing(background_tasks: BackgroundTasks, session_id: str = Form(...), frames_dir: str = Form(...)):
+    # Resolve frames_dir safely
+    frames_path = (BASE_DIR / frames_dir).resolve()
+    if not str(frames_path).startswith(str(TEMP_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="frames_dir must be under temp directory")
+    if not frames_path.exists():
+        raise HTTPException(status_code=404, detail="frames_dir not found")
+
+    # Start background task
+    background_tasks.add_task(_run_blink_processing, session_id, frames_path)
+    _update_status(session_id, "blink", 0, 0, state="running")
+    return {"started": True}
+
+
+@app.get("/api/video/status/{session_id}")
+async def get_video_status(session_id: str):
+    st = VIDEO_STATUS.get(session_id)
+    if not st:
+        raise HTTPException(status_code=404, detail="No status for session")
+    return st
 
 
 # ===================================
