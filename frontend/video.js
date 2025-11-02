@@ -132,6 +132,18 @@
         logStatus(`Processing: ${stage} ${progress} ${state === 'done' ? '(done)' : ''}`);
         if (state === 'done' || state === 'error') {
           done = true;
+          // On completion, fetch combined summary and navigate to analysis hub
+          try {
+            const sumRes = await fetch(`/api/video/summary/${encodeURIComponent(sessionId)}`);
+            if (sumRes.ok) {
+              const summary = await sumRes.json();
+              sessionStorage.setItem('video_summary', JSON.stringify(summary));
+            }
+          } catch (e) {
+            console.warn('failed to fetch video summary', e);
+          }
+          // Redirect to analysis hub (no actions wired yet)
+          window.location.href = '/analysis';
           break;
         }
       } catch (e) {

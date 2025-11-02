@@ -108,6 +108,15 @@ async def video_page() -> FileResponse:
     return FileResponse(str(video_page_path))
 
 
+@app.get("/analysis")
+async def analysis_page() -> FileResponse:
+    """Serve the Analysis Hub page with next-step buttons."""
+    analysis_path = FRONTEND_DIR / "analysis.html"
+    if not analysis_path.exists():
+        raise HTTPException(status_code=500, detail="Analysis page not found")
+    return FileResponse(str(analysis_path))
+
+
 @app.get("/api/video/trigger")
 async def get_trigger_video() -> FileResponse:
     """Stream the trigger video file to the client."""
@@ -421,6 +430,12 @@ def _run_processing(session_id: str, frames_dir: Path):
         total_pupil = pupil_res["summary"].get("frames_processed", 0)
         _update_status(session_id, "pupil", total_pupil, total_pupil, state="done")
 
+        # Emotion stage
+        _update_status(session_id, "emotion", 0, 0, state="running")
+        emotion_res = analyzer.process_frames_emotion(frames_dir, on_progress=on_progress)
+        total_emotion = emotion_res["summary"].get("frames_processed", 0)
+        _update_status(session_id, "emotion", total_emotion, total_emotion, state="done")
+
         # Build combined summary record
         combined = {
             "type": "video",
@@ -429,6 +444,7 @@ def _run_processing(session_id: str, frames_dir: Path):
             "blink": blink_res.get("summary", {}),
             "gaze": gaze_res.get("summary", {}),
             "pupil": pupil_res.get("summary", {}),
+            "emotion": emotion_res.get("summary", {}),
             "version": 1,
         }
 
@@ -449,8 +465,8 @@ def _run_processing(session_id: str, frames_dir: Path):
         # All done
         VIDEO_STATUS[session_id] = {
             "stage": "done",
-            "processed": total_pupil,
-            "total": total_pupil,
+            "processed": total_emotion,
+            "total": total_emotion,
             "state": "done",
             "time": datetime.utcnow().isoformat() + "Z",
         }
@@ -542,6 +558,34 @@ async def get_session_results(session_id: str):
         raise HTTPException(status_code=404, detail=f"No data found for session {session_id}")
     
     return results
+
+
+@app.get("/api/video/summary/{session_id}")
+async def get_video_summary(session_id: str):
+    """Return the latest combined video summary for a session.
+    Reads from backend/data/video_results.jsonl and returns the most recent
+    record where type=="video" and session_id matches.
+    """
+    if not VIDEO_RESULTS_PATH.exists():
+        raise HTTPException(status_code=404, detail="No video results available")
+
+    latest: dict | None = None
+    try:
+        with open(VIDEO_RESULTS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                except Exception:
+                    continue
+                if rec.get("type") == "video" and rec.get("session_id") == session_id:
+                    latest = rec
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read video results: {e}")
+
+    if not latest:
+        raise HTTPException(status_code=404, detail=f"No video summary found for session {session_id}")
+
+    return latest
 
 
 if __name__ == "__main__":

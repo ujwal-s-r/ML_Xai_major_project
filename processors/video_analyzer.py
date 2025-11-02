@@ -10,6 +10,7 @@ import cv2
 from .blink_detector import BlinkDetector
 from .gaze_percentile_estimator import GazePercentileEstimator, GazePercentileConfig
 from .iris_tracker import IrisTracker
+from .emotion_analyzer import EmotionAnalyzer
 
 
 @dataclass
@@ -41,6 +42,13 @@ class VideoAnalyzer:
         except Exception as e:
             self.iris = None  # type: ignore
             self._iris_error = e
+        # Emotion analyzer
+        try:
+            self.emotion = EmotionAnalyzer()
+            self._emotion_error = None
+        except Exception as e:
+            self.emotion = None  # type: ignore
+            self._emotion_error = e
 
     def process_frames_blink(
         self,
@@ -217,15 +225,87 @@ class VideoAnalyzer:
         }
         return {"timeline": timeline, "summary": summary}
 
+    def process_frames_emotion(
+        self,
+        frames_dir: Path,
+        on_progress: Callable[[Progress], None] | None = None,
+    ) -> Dict[str, Any]:
+        if self.emotion is None:
+            raise RuntimeError(f"Emotion analyzer not available: {self._emotion_error}")
+        frames_dir = Path(frames_dir)
+        image_paths: List[Path] = sorted(p for p in frames_dir.glob("*.jpg"))
+        total = len(image_paths)
+
+        per_frame_path = frames_dir / "emotion_frames.jsonl"
+        counts: Dict[str, int] = {}
+        frames_with_face = 0
+        frames_classified = 0
+        error_count = 0
+        last_error = None
+        timeline: List[Dict[str, Any]] = []
+
+        with open(per_frame_path, "w", encoding="utf-8") as pf:
+            for i, img_path in enumerate(image_paths, start=1):
+                frame = cv2.imread(str(img_path))
+                result = self.emotion.detect_emotion(frame)
+                success = bool(result.get("success"))
+                if result.get("face_detected"):
+                    frames_with_face += 1
+                dom = result.get("dominant_emotion")
+                if dom:
+                    counts[dom] = counts.get(dom, 0) + 1
+                if success:
+                    frames_classified += 1
+                if not success and result.get("error"):
+                    error_count += 1
+                    last_error = result.get("error")
+
+                # minimal timeline
+                timeline.append({
+                    "frame_index": i,
+                    "file": img_path.name,
+                    "success": success,
+                    "dominant_emotion": dom,
+                })
+
+                # per-frame JSONL
+                rec = {
+                    "frame_index": i,
+                    "file": img_path.name,
+                    "success": success,
+                    "face_detected": bool(result.get("face_detected")),
+                    "bbox": result.get("bbox"),
+                    "dominant_emotion": dom,
+                    "emotions": result.get("emotions"),
+                    "error": result.get("error"),
+                }
+                pf.write(json.dumps(rec) + "\n")
+
+                if on_progress:
+                    on_progress(Progress(stage="emotion", processed=i, total=total))
+
+        summary = {
+            "frames_processed": total,
+            "frames_with_face": frames_with_face,
+            "frames_classified": frames_classified,
+            "errors": error_count,
+            "last_error": last_error,
+            "dominant_counts": counts,
+            "per_frame_path": str(per_frame_path),
+        }
+        return {"timeline": timeline, "summary": summary}
+
     def process_pipeline(self, frames_dir: Path, on_progress: Callable[[Progress], None] | None = None) -> Dict[str, Any]:
         blink = self.process_frames_blink(frames_dir, on_progress)
         gaze = self.process_frames_gaze(frames_dir, on_progress)
         pupil = self.process_frames_pupil(frames_dir, on_progress)
+        emotion = self.process_frames_emotion(frames_dir, on_progress)
         # Print combined JSON for terminal review
         print(json.dumps({
             "type": "processing_summary",
             "blink": blink["summary"],
             "gaze": gaze["summary"],
             "pupil": pupil["summary"],
+            "emotion": emotion["summary"],
         }, ensure_ascii=False))
-        return {"blink": blink, "gaze": gaze, "pupil": pupil}
+        return {"blink": blink, "gaze": gaze, "pupil": pupil, "emotion": emotion}

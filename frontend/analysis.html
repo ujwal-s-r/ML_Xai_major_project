@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Analysis Hub</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    .container { max-width: 720px; margin: 16px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+    .muted { color:#64748b; }
+    .pill { background:#eef2ff; border:1px solid #c7d2fe; padding:6px 10px; border-radius:999px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Analysis Hub</h1>
+    <p class="subtitle">Your video has been processed. Choose what to explore next.</p>
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap: wrap;">
+        <span class="pill">Session: <span id="sessionId">-</span></span>
+        <a class="button secondary" href="/video">Run Again</a>
+      </div>
+      <p class="muted" style="margin-top:12px;">We saved the full processing summary in your browser for this session.
+        You can use it for AI analysis or dashboarding next.</p>
+
+      <div class="actions" style="margin-top:16px;">
+        <button id="aiBtn" class="button">AI analysis</button>
+        <button id="dashBtn" class="button secondary">Dashboard</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>© 2025 Analysis Hub</small>
+  </footer>
+
+  <script src="/static/analysis.js"></script>
+</body>
+</html>
