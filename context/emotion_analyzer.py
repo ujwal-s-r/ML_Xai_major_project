@@ -10,13 +10,14 @@ from PIL import Image
 import mediapipe as mp
 
 class EmotionAnalyzer:
-    def __init__(self):
-        """Initialize the emotion analyzer with ViT-based model."""
-        print("Initializing ViT-based Emotion Analyzer...")
-        
-        # Supported emotions (same as before for compatibility)
+    def __init__(self, processor: Optional[AutoImageProcessor] = None, model: Optional[AutoModelForImageClassification] = None, device: Optional[str] = None, enable_face_detector: bool = True):
+        """Initialize the emotion analyzer with a ViT-based model (Transformers).
+
+        Optional args allow injecting mocks in tests or custom devices.
+        """
+        # Supported emotions (aligned with model labels)
         self.emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
-        
+
         # Emotion map for integer coding
         self.emotion_map = {
             'neutral': 0,
@@ -27,111 +28,81 @@ class EmotionAnalyzer:
             'surprise': 5,
             'disgust': 6
         }
-        
-        # Initialize ViT model and processor
-        try:
-            model_name = "dima806/facial_emotions_image_detection"
-            print(f"Loading model: {model_name}")
+
+        # Load ViT model and processor
+        model_name = "dima806/facial_emotions_image_detection"
+        if processor is None or model is None:
+            print(f"[EmotionAnalyzer] Loading model: {model_name}")
             self.processor = AutoImageProcessor.from_pretrained(model_name)
             self.model = AutoModelForImageClassification.from_pretrained(model_name)
-            
-            # Set device (GPU if available, otherwise CPU)
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model.to(self.device)
-            self.model.eval()  # Set to evaluation mode
-            print(f"Model loaded successfully on device: {self.device}")
-        except Exception as e:
-            print(f"Error loading ViT model: {e}")
-            raise
-        
-        # Initialize MediaPipe Face Detection for face cropping
-        self.mp_face_detection = mp.solutions.face_detection
-        self.face_detection = self.mp_face_detection.FaceDetection(
-            model_selection=1,  # 1 for full range detection
-            min_detection_confidence=0.5
-        )
-        
-        # Error handling
+        else:
+            self.processor = processor
+            self.model = model
+
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        self.model.eval()
+        print(f"[EmotionAnalyzer] Model loaded on device: {self.device}")
+
+        # Initialize MediaPipe face detection to crop faces before classification
+        self.face_detection = None
+        if enable_face_detector:
+            self.mp_face_detection = mp.solutions.face_detection
+            self.face_detection = self.mp_face_detection.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.5
+            )
+
+        # Error handling state
         self.last_successful_result = None
         self.consecutive_failures = 0
         self.max_failures = 5
-        
+
         # Results storage
         self.emotion_counts = {emotion: 0 for emotion in self.emotions}
         self.all_frames_emotions = []
         self.dominant_emotion = None
         self.dominant_emotion_code = None
-        
+
         # Cache for results to avoid redundant processing
         self.result_cache = {}
         self.cache_max_size = 30  # Limit cache size to prevent memory issues
         
-    
     def _detect_and_crop_face(self, frame: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[Dict]]:
-        """
-        Detect face in frame and crop it for emotion detection.
-        
-        Args:
-            frame: Input frame from video (BGR format)
-            
-        Returns:
-            Tuple of (cropped_face, face_region_dict) or (None, None) if no face detected
+        """Detect face using MediaPipe and crop ROI for classification.
+
+        Returns (face_crop_bgr, face_region_dict) or (None, None) if no face.
         """
         try:
-            # Convert BGR to RGB for MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, _ = frame.shape
-            
-            # Detect faces
-            results = self.face_detection.process(rgb_frame)
-            
+            results = self.face_detection.process(rgb)
             if not results.detections:
                 return None, None
-            
-            # Get the first (most confident) detection
+
             detection = results.detections[0]
-            
-            # Get bounding box
             bbox = detection.location_data.relative_bounding_box
             x = int(bbox.xmin * w)
             y = int(bbox.ymin * h)
-            box_w = int(bbox.width * w)
-            box_h = int(bbox.height * h)
-            
-            # Add padding to ensure full face is captured
-            padding = 20
-            x = max(0, x - padding)
-            y = max(0, y - padding)
-            box_w = min(w - x, box_w + 2 * padding)
-            box_h = min(h - y, box_h + 2 * padding)
-            
-            # Crop face region
-            face_crop = frame[y:y+box_h, x:x+box_w]
-            
-            # Create face region dict for compatibility
-            face_region = {'x': x, 'y': y, 'w': box_w, 'h': box_h}
-            
-            return face_crop, face_region
-            
+            bw = int(bbox.width * w)
+            bh = int(bbox.height * h)
+
+            # Pad box a bit
+            pad = 20
+            x = max(0, x - pad)
+            y = max(0, y - pad)
+            bw = min(w - x, bw + 2 * pad)
+            bh = min(h - y, bh + 2 * pad)
+
+            crop = frame[y:y+bh, x:x+bw]
+            region = {"x": x, "y": y, "w": bw, "h": bh}
+            return crop, region
         except Exception as e:
-            print(f"Error in face detection: {e}")
+            print(f"[EmotionAnalyzer] Face detection error: {e}")
             return None, None
     
     def detect_emotion(self, frame: np.ndarray) -> Dict:
-        """
-        Detect emotions in a single frame using ViT model.
-        
-        Args:
-            frame: Input frame from video (BGR format)
-            
-        Returns:
-            Dictionary containing emotion detection data:
-            - emotions: Dictionary with emotion probabilities (percentages)
-            - dominant_emotion: String name of dominant emotion
-            - dominant_emotion_code: Integer code of dominant emotion
-            - success: Boolean indicating successful detection
-            - face_region: Dictionary with face coordinates (if available)
-        """
+        """Detect emotions in a single frame using ViT model."""
         # Initialize return data
         emotion_data = {
             'emotions': None,
@@ -140,33 +111,29 @@ class EmotionAnalyzer:
             'success': False,
             'face_region': None
         }
-        
-        # Check if frame is valid
+
+        # Validate frame
         if frame is None or frame.size == 0:
-            print("Invalid frame provided to detect_emotion")
+            print("[EmotionAnalyzer] Invalid frame provided to detect_emotion")
             if self.last_successful_result:
                 result = self.last_successful_result.copy()
                 result['fresh'] = False
                 return result
             return emotion_data
-        
-        # Generate a cache key based on frame data
+
+        # Cache key for identical frames
         try:
-            small_frame = cv2.resize(frame, (100, 100))
-            cache_key = hash(small_frame.tobytes())
-            
-            # Check if result is in cache
+            small = cv2.resize(frame, (100, 100))
+            cache_key = hash(small.tobytes())
             if cache_key in self.result_cache:
                 return self.result_cache[cache_key]
-                
         except Exception as e:
-            print(f"Error generating cache key: {e}")
+            print(f"[EmotionAnalyzer] Cache key error: {e}")
             cache_key = None
-        
+
         try:
             # Detect and crop face
             face_crop, face_region = self._detect_and_crop_face(frame)
-            
             if face_crop is None:
                 self.consecutive_failures += 1
                 if self.last_successful_result:
@@ -174,69 +141,55 @@ class EmotionAnalyzer:
                     result['fresh'] = False
                     return result
                 return emotion_data
-            
-            # Convert BGR to RGB for the model
+
+            # Convert to PIL and preprocess
             rgb_face = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            
-            # Convert to PIL Image
-            pil_image = Image.fromarray(rgb_face)
-            
-            # Preprocess image using ViT processor
-            inputs = self.processor(images=pil_image, return_tensors="pt")
+            pil_img = Image.fromarray(rgb_face)
+            inputs = self.processor(images=pil_img, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            # Run inference
+
             with torch.no_grad():
                 outputs = self.model(**inputs)
                 logits = outputs.logits
-                
-                # Get probabilities using softmax
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                probs = probs.cpu().numpy()[0]
-            
-            # Get emotion labels from model config
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()[0]
+
+            # Map id->label and build percentage dict
             id2label = self.model.config.id2label
-            
-            # Create emotions dictionary with percentages
-            emotions_dict = {}
-            for idx, prob in enumerate(probs):
-                label = id2label[idx].lower()
-                emotions_dict[label] = float(prob * 100)
-            
+            emotions_dict = {lbl.lower(): 0.0 for lbl in self.emotions}
+            for idx, p in enumerate(probs):
+                lbl = id2label[idx].lower()
+                emotions_dict[lbl] = float(p * 100.0)
+
             # Determine dominant emotion
             dominant_emotion = max(emotions_dict, key=emotions_dict.get)
             dominant_emotion_code = self.emotion_map.get(dominant_emotion, -1)
-            
-            # Reset failures counter on success
+
+            # Success
             self.consecutive_failures = 0
-            
-            # Populate return data
             emotion_data['emotions'] = emotions_dict
             emotion_data['dominant_emotion'] = dominant_emotion
             emotion_data['dominant_emotion_code'] = dominant_emotion_code
             emotion_data['success'] = True
             emotion_data['face_region'] = face_region
             emotion_data['fresh'] = True
-            
-            # Store as last successful result
-            self.last_successful_result = emotion_data.copy()
-            
-            # Cache the result
+
+            # Cache
             if cache_key is not None:
                 self.result_cache[cache_key] = emotion_data.copy()
-                
-                # Limit cache size
                 if len(self.result_cache) > self.cache_max_size:
                     self.result_cache.pop(next(iter(self.result_cache)))
-            
+
+            # Track last successful
+            self.last_successful_result = emotion_data.copy()
+
         except Exception as e:
-            print(f"Error in ViT emotion detection: {e}")
+            print(f"[EmotionAnalyzer] ViT detection error: {e}")
             self.consecutive_failures += 1
             if self.last_successful_result:
                 result = self.last_successful_result.copy()
                 result['fresh'] = False
                 return result
-        
+
         return emotion_data
 
     def process_video(self, video_path: str, output_path: Optional[str] = None, fps: int = 10) -> int:
@@ -326,20 +279,20 @@ class EmotionAnalyzer:
             cap.release()
             if writer:
                 writer.release()
-        
+
         # Calculate the dominant emotion across all frames
         if self.all_frames_emotions:
             most_common = Counter(self.all_frames_emotions).most_common(1)[0][0]
             self.dominant_emotion = most_common
             self.dominant_emotion_code = self.emotion_map[most_common]
-            
+
             print(f"Analysis complete. Dominant emotion: {self.dominant_emotion} (code: {self.dominant_emotion_code})")
             print(f"Emotion distribution: {self.emotion_counts}")
         else:
             print("No emotions detected in the video")
             self.dominant_emotion = "neutral"
             self.dominant_emotion_code = 0
-        
+
         return self.dominant_emotion_code
         
     def visualize_emotion_detection(self, frame: np.ndarray, emotion_data: Dict) -> np.ndarray:

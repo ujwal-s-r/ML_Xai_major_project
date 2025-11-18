@@ -1,8 +1,20 @@
-# Video Processing Module for Mental Health Assessment System
+"""
+Processors package for video analysis.
+Contains high-level processors that wrap context models.
+"""
 
-from .emotion_analyzer import EmotionAnalyzer
-from .blink_detector import BlinkDetector
-from .iris_tracker import IrisTracker
-from .video_analyzer import VideoAnalyzer
+from .blink_counter import BlinkCounterProcessor, compute_blink_summary
+from .gaze_processor import GazeProcessor
+from .pupil_processor import PupilProcessor
+from .emotion_processor import EmotionProcessor
+from .video_pipeline import VideoAnalysisPipeline, process_video
 
-# Note: Gaze estimation is integrated directly in VideoAnalyzer using L2CS Pipeline 
+__all__ = [
+    'BlinkCounterProcessor',
+    'compute_blink_summary',
+    'GazeProcessor',
+    'PupilProcessor',
+    'EmotionProcessor',
+    'VideoAnalysisPipeline',
+    'process_video',
+]

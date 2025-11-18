@@ -1,41 +1,31 @@
 /**
- * Video Analysis - Batch Processing Mode
- * 1. Captures all webcam frames while video plays
- * 2. Sends batch to backend for sequential processing
- * 3. Displays results after processing complete
+ * Video Analysis Module
+ * Records webcam while playing trigger video, then processes through ML pipeline
  */
 
 // Global state
 let stream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
 let videoElement = null;
-let canvasElement = null;
-let ctx = null;
 let sessionId = null;
-let isCapturing = false;
+let isRecording = false;
 
-// Frame storage
-let capturedFrames = [];
-const FPS = 30;
-
-// Results storage
-let timeline = [];
-let summary = null;
-
-// Initialize
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('Video analysis page loaded (BATCH MODE)');
+    console.log('Video analysis page loaded');
     
     videoElement = document.getElementById('triggerVideo');
-    canvasElement = document.getElementById('frameCanvas');
-    ctx = canvasElement.getContext('2d');
     
-    // Get session ID from localStorage
+    // Get or create session ID
     sessionId = localStorage.getItem('session_id');
     if (!sessionId) {
-        alert('No session ID found. Please complete the questionnaire first.');
-        window.location.href = '/';
-        return;
+        console.warn('No session ID found, creating temporary session');
+        sessionId = 'session_' + Date.now();
+        localStorage.setItem('session_id', sessionId);
     }
+    
+    console.log('Session ID:', sessionId);
     
     // Set up start button
     const startBtn = document.getElementById('startBtn');
@@ -43,11 +33,12 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function startAnalysis() {
-    console.log('Starting video analysis (BATCH MODE)...');
+    console.log('Starting video analysis...');
     
     const startBtn = document.getElementById('startBtn');
-    const startOverlay = document.getElementById('startOverlay');
-    const progressSection = document.getElementById('progressSection');
+    const instructionsScreen = document.getElementById('instructionsScreen');
+    const videoScreen = document.getElementById('videoScreen');
+    const webcamPreview = document.getElementById('webcamPreview');
     
     startBtn.disabled = true;
     startBtn.textContent = 'Requesting camera access...';
@@ -56,156 +47,243 @@ async function startAnalysis() {
         // Request webcam access
         stream = await navigator.mediaDevices.getUserMedia({
             video: {
-                width: { ideal: 640 },
-                height: { ideal: 480 },
-                frameRate: { ideal: FPS }
-            }
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                frameRate: { ideal: 30 }
+            },
+            audio: false
         });
         
-        console.log('Webcam access granted');
+        console.log('✓ Webcam access granted');
         
-        // Set canvas size
-        canvasElement.width = 640;
-        canvasElement.height = 480;
+        // Set up webcam preview (hidden, but recording)
+        webcamPreview.srcObject = stream;
         
-        // Hide overlay, show progress
-        startOverlay.classList.add('hidden');
-        progressSection.classList.remove('hidden');
+        // Hide instructions, show video screen
+        instructionsScreen.classList.add('hidden');
+        videoScreen.classList.add('active');
         
-        // Update progress text
-        document.getElementById('progressText').textContent = 'Capturing frames from webcam...';
-        document.getElementById('framesProcessed').textContent = '0';
-        document.getElementById('blinksDetected').textContent = '-';
-        document.getElementById('currentEmotion').textContent = 'Capturing...';
-        document.getElementById('gazeDirection').textContent = '-';
+        // Enter fullscreen
+        try {
+            if (videoScreen.requestFullscreen) {
+                await videoScreen.requestFullscreen();
+            } else if (videoScreen.webkitRequestFullscreen) {
+                await videoScreen.webkitRequestFullscreen();
+            } else if (videoScreen.msRequestFullscreen) {
+                await videoScreen.msRequestFullscreen();
+            }
+            console.log('✓ Entered fullscreen mode');
+        } catch (fsError) {
+            console.warn('Fullscreen not available:', fsError);
+        }
         
-        // Start video
+        // Set up MediaRecorder
+        recordedChunks = [];
+        
+        // Use vp9 codec if available, otherwise vp8
+        let mimeType = 'video/webm;codecs=vp9';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'video/webm;codecs=vp8';
+            console.log('vp9 not supported, using vp8');
+        }
+        
+        mediaRecorder = new MediaRecorder(stream, { 
+            mimeType: mimeType,
+            videoBitsPerSecond: 2500000 // 2.5 Mbps
+        });
+        
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data && event.data.size > 0) {
+                recordedChunks.push(event.data);
+                console.log(`Recording chunk: ${event.data.size} bytes`);
+            }
+        };
+        
+        mediaRecorder.onstop = async () => {
+            console.log('Recording stopped');
+            
+            // Exit fullscreen
+            if (document.fullscreenElement) {
+                try {
+                    await document.exitFullscreen();
+                } catch (e) {
+                    console.warn('Could not exit fullscreen:', e);
+                }
+            }
+            
+            // Hide video screen
+            videoScreen.classList.remove('active');
+            
+            // Stop webcam
+            if (stream) {
+                stream.getTracks().forEach(track => {
+                    track.stop();
+                    console.log('Stopped track:', track.kind);
+                });
+            }
+            
+            // Create blob and upload
+            const blob = new Blob(recordedChunks, { type: mimeType });
+            console.log(`Total recording size: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+            
+            await uploadAndProcess(blob);
+        };
+        
+        // Start recording
+        isRecording = true;
+        mediaRecorder.start(1000); // Capture in 1-second chunks
+        console.log('✓ Recording started');
+        
+        // Play trigger video
         videoElement.play();
+        console.log('✓ Trigger video playing');
         
-        // Start frame capture loop
-        isCapturing = true;
-        capturedFrames = [];
-        captureFrameLoop();
+        // When video ends, stop recording
+        videoElement.addEventListener('ended', () => {
+            console.log('Trigger video ended');
+            
+            if (isRecording && mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                isRecording = false;
+            }
+        }, { once: true });
         
-        // Handle video end
-        videoElement.addEventListener('ended', onVideoEnded, { once: true });
+        // Handle manual fullscreen exit
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && isRecording) {
+                console.log('User exited fullscreen early');
+                videoElement.pause();
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                    isRecording = false;
+                }
+            }
+        }, { once: true });
         
     } catch (error) {
         console.error('Failed to start analysis:', error);
-        alert('Could not start analysis. Please check camera permissions.');
+        alert('Could not access camera. Please check permissions and try again.');
         startBtn.disabled = false;
         startBtn.textContent = 'Start Analysis';
+        
+        // Clean up
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        }
+        instructionsScreen.classList.remove('hidden');
+        videoScreen.classList.remove('active');
     }
 }
 
-async function captureFrameLoop() {
-    if (!isCapturing || !stream) return;
+async function uploadAndProcess(videoBlob) {
+    console.log('Starting upload and processing...');
+    
+    const loadingScreen = document.getElementById('loadingScreen');
+    const progressBar = document.getElementById('progressBar');
+    
+    // Show loading screen
+    loadingScreen.classList.add('active');
+    progressBar.style.width = '0%';
+    
+    // Update stages
+    const updateStage = (stageId, status) => {
+        const stage = document.getElementById(stageId);
+        const statusIcon = stage.querySelector('.stage-status');
+        
+        if (status === 'active') {
+            stage.classList.add('active');
+            statusIcon.textContent = '⏳';
+        } else if (status === 'complete') {
+            stage.classList.remove('active');
+            stage.classList.add('complete');
+            statusIcon.textContent = '✅';
+        } else if (status === 'error') {
+            stage.classList.remove('active');
+            statusIcon.textContent = '❌';
+        }
+    };
     
     try {
-        // Capture frame from webcam
-        const videoTrack = stream.getVideoTracks()[0];
-        const imageCapture = new ImageCapture(videoTrack);
-        const blob = await imageCapture.takePhoto();
+        // Stage 1: Upload
+        updateStage('stageUpload', 'active');
+        progressBar.style.width = '10%';
         
-        // Draw to canvas
-        const img = await createImageBitmap(blob);
-        ctx.drawImage(img, 0, 0, canvasElement.width, canvasElement.height);
+        const formData = new FormData();
+        formData.append('session_id', sessionId);
+        formData.append('video_file', videoBlob, 'recording.webm');
         
-        // Get base64 image and store it
-        const base64Image = canvasElement.toDataURL('image/jpeg', 0.8);
-        capturedFrames.push(base64Image);
+        console.log('Uploading video...');
         
-        // Update progress
-        const estimatedTotalFrames = videoElement.duration * FPS;
-        const captureProgress = Math.min((capturedFrames.length / estimatedTotalFrames) * 50, 50);
-        document.getElementById('progressBar').style.width = `${captureProgress}%`;
-        document.getElementById('progressText').textContent = `Captured ${capturedFrames.length} frames...`;
-        document.getElementById('framesProcessed').textContent = capturedFrames.length;
-        
-        // Continue loop if video is still playing
-        if (!videoElement.ended && isCapturing) {
-            setTimeout(captureFrameLoop, 1000 / FPS);
-        }
-        
-    } catch (error) {
-        console.error('Error in frame capture loop:', error);
-        // Continue anyway
-        if (!videoElement.ended && isCapturing) {
-            setTimeout(captureFrameLoop, 1000 / FPS);
-        }
-    }
-}
-
-async function onVideoEnded() {
-    console.log('Video ended, processing frames...');
-    isCapturing = false;
-    
-    // Stop webcam
-    if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-    }
-    
-    console.log(`Total frames captured: ${capturedFrames.length}`);
-    
-    // Update UI
-    document.getElementById('progressBar').style.width = '50%';
-    document.getElementById('progressText').textContent = `Processing ${capturedFrames.length} frames...`;
-    document.getElementById('currentEmotion').textContent = 'Processing...';
-    
-    // Send batch to backend for processing
-    try {
-        console.log('Sending frames to backend...');
-        
-        const response = await fetch('/api/video/process-batch', {
+        const response = await fetch('/api/video/upload-and-process', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                frames_base64: capturedFrames,
-                fps: FPS,
-                session_id: sessionId
-            })
+            body: formData
         });
         
         if (!response.ok) {
-            throw new Error('Failed to process frames');
+            const errorText = await response.text();
+            throw new Error(`Upload failed: ${response.status} - ${errorText}`);
         }
         
+        updateStage('stageUpload', 'complete');
+        progressBar.style.width = '20%';
+        
+        // Stage 2: Blink detection
+        updateStage('stageBlink', 'active');
+        progressBar.style.width = '40%';
+        
+        // Simulate processing stages (backend processes all at once)
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        updateStage('stageBlink', 'complete');
+        
+        // Stage 3: Gaze tracking
+        updateStage('stageGaze', 'active');
+        progressBar.style.width = '60%';
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        updateStage('stageGaze', 'complete');
+        
+        // Stage 4: Pupil analysis
+        updateStage('stagePupil', 'active');
+        progressBar.style.width = '80%';
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        updateStage('stagePupil', 'complete');
+        
+        // Stage 5: Emotion recognition
+        updateStage('stageEmotion', 'active');
+        progressBar.style.width = '90%';
+        
+        // Get results
         const results = await response.json();
         console.log('Processing complete:', results);
-        console.log('Timeline entries:', results.timeline ? results.timeline.length : 0);
-        console.log('Summary:', JSON.stringify(results.summary, null, 2));
         
-        // Store results
-        timeline = results.timeline || [];
-        summary = results.summary || {};
+        updateStage('stageEmotion', 'complete');
+        progressBar.style.width = '100%';
         
-        console.log('Stored summary:', JSON.stringify(summary, null, 2));
+        // Wait a moment to show completion
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // Update progress to 100%
-        document.getElementById('progressBar').style.width = '100%';
-        document.getElementById('progressText').textContent = 'Processing complete!';
+        // Save results
+        await saveResults(results);
         
-        // Submit to save
-        await submitResults();
-        
-        // Show results
-        console.log('Calling showResults with:', JSON.stringify(summary, null, 2));
-        showResults(summary);
+        // Show completion screen with options
+        showCompletionScreen();
         
     } catch (error) {
-        console.error('Error processing frames:', error);
-        alert('Failed to process video. Please try again.');
+        console.error('Processing failed:', error);
+        alert(`Failed to process video: ${error.message}`);
         
-        // Show partial results if available
-        if (summary) {
-            showResults(summary);
-        }
+        // Mark current stage as error
+        document.querySelectorAll('.stage-item.active').forEach(stage => {
+            updateStage(stage.id, 'error');
+        });
+        
+        // Allow retry
+        setTimeout(() => {
+            location.reload();
+        }, 3000);
     }
 }
 
-async function submitResults() {
+async function saveResults(results) {
     try {
         const response = await fetch('/api/video/submit', {
             method: 'POST',
@@ -215,87 +293,59 @@ async function submitResults() {
             body: JSON.stringify({
                 session_id: sessionId,
                 trigger_video: 'hack.mp4',
-                duration_seconds: videoElement.duration,
-                timeline: timeline,
-                summary: summary
+                duration_seconds: videoElement.duration || 0,
+                timeline: results.timeline || [],
+                summary: results.summary || {}
             })
         });
         
         if (!response.ok) {
-            throw new Error('Failed to submit results');
+            throw new Error('Failed to save results');
         }
         
         const result = await response.json();
-        console.log('Results saved:', result);
+        console.log('✓ Results saved:', result);
         
     } catch (error) {
         console.error('Error saving results:', error);
-        // Continue anyway, show results
+        // Continue anyway
     }
 }
 
-function showResults(summary) {
-    console.log('=== showResults() called ===');
-    console.log('Summary object:', summary);
-    console.log('Summary type:', typeof summary);
-    console.log('Has blink?', !!summary.blink);
-    console.log('Has emotion?', !!summary.emotion);
-    console.log('Has gaze?', !!summary.gaze);
-    console.log('Has pupil?', !!summary.pupil);
+function showCompletionScreen() {
+    const loadingScreen = document.getElementById('loadingScreen');
+    const loadingContent = loadingScreen.querySelector('.loading-content');
     
-    // Hide progress, show results
-    document.getElementById('progressSection').classList.add('hidden');
-    document.getElementById('resultsSection').classList.remove('hidden');
-    
-    // Populate results
-    if (summary.blink) {
-        console.log('Setting blink data:', summary.blink);
-        document.getElementById('totalBlinks').textContent = summary.blink.total_blinks || 0;
-        document.getElementById('blinkRate').textContent = `${summary.blink.blink_rate_per_minute || 0}/min`;
-    } else {
-        console.warn('No blink data in summary');
-    }
-    
-    if (summary.emotion) {
-        console.log('Setting emotion data:', summary.emotion);
-        document.getElementById('dominantEmotion').textContent = summary.emotion.dominant_emotion || '-';
-        
-        // Emotion distribution
-        const emotionDist = document.getElementById('emotionDistribution');
-        emotionDist.innerHTML = '';
-        const distribution = summary.emotion.distribution || {};
-        console.log('Emotion distribution:', distribution);
-        for (const [emotion, count] of Object.entries(distribution)) {
-            const badge = document.createElement('div');
-            badge.className = 'emotion-badge';
-            badge.textContent = `${emotion}: ${count}`;
-            emotionDist.appendChild(badge);
-        }
-    } else {
-        console.warn('No emotion data in summary');
-    }
-    
-    if (summary.gaze) {
-        console.log('Setting gaze data:', summary.gaze);
-        const attentionScore = summary.gaze.attention_score || 0;
-        document.getElementById('attentionScore').textContent = `${Math.round(attentionScore * 100)}%`;
-        
-        const gazePct = summary.gaze.distribution_percentage || {};
-        console.log('Gaze percentages:', gazePct);
-        document.getElementById('gazeLeft').textContent = `${Math.round(gazePct.left || 0)}%`;
-        document.getElementById('gazeCenter').textContent = `${Math.round(gazePct.center || 0)}%`;
-        document.getElementById('gazeRight').textContent = `${Math.round(gazePct.right || 0)}%`;
-    } else {
-        console.warn('No gaze data in summary');
-    }
-    
-    if (summary.pupil) {
-        console.log('Setting pupil data:', summary.pupil);
-        document.getElementById('avgPupil').textContent = (summary.pupil.avg_pupil_size || 0).toFixed(4);
-        document.getElementById('dilationEvents').textContent = summary.pupil.pupil_dilation_events || 0;
-    } else {
-        console.warn('No pupil data in summary');
-    }
-    
-    console.log('=== Results display complete ===');
+    // Replace loading content with completion UI
+    loadingContent.innerHTML = `
+        <div style="text-align: center;">
+            <div style="font-size: 4rem; margin-bottom: 1rem;">✅</div>
+            <h1 style="font-size: 2.5rem; margin-bottom: 1rem;">Analysis Complete!</h1>
+            <p style="font-size: 1.2rem; opacity: 0.9; margin-bottom: 3rem;">
+                Your video has been processed successfully.<br>
+                All facial expressions, gaze, and emotions have been analyzed.
+            </p>
+            
+            <div style="display: flex; gap: 2rem; justify-content: center; flex-wrap: wrap; max-width: 600px; margin: 0 auto;">
+                <button onclick="window.location.href='/dashboard'" 
+                        style="padding: 1.5rem 3rem; font-size: 1.3rem; background: white; color: #667eea; 
+                               border: none; border-radius: 50px; cursor: pointer; font-weight: 700; 
+                               box-shadow: 0 10px 30px rgba(0,0,0,0.3); transition: all 0.3s ease;
+                               min-width: 250px;">
+                    📊 View Dashboard
+                </button>
+                
+                <button onclick="window.location.href='/ai-analysis'" 
+                        style="padding: 1.5rem 3rem; font-size: 1.3rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                               color: white; border: 2px solid white; border-radius: 50px; cursor: pointer; font-weight: 700; 
+                               transition: all 0.3s ease; min-width: 250px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                    🤖 AI Analysis
+                </button>
+            </div>
+            
+            <p style="margin-top: 3rem; opacity: 0.7; font-size: 0.9rem;">
+                Session ID: ${sessionId}
+            </p>
+        </div>
+    `;
 }

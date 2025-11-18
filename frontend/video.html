@@ -3,306 +3,360 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Analysis - Depression Assessment</title>
+    <title>Video Analysis - Mental Health Assessment</title>
     <link rel="stylesheet" href="/static/styles.css">
     <style>
-        .video-container {
-            position: relative;
-            width: 100%;
-            max-width: 960px;
-            margin: 2rem auto;
-            background: #000;
-            border-radius: 8px;
-            overflow: hidden;
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
         }
-        
-        .trigger-video {
-            width: 100%;
-            display: block;
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
         }
-        
-        .video-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.9);
+
+        /* Instructions Screen */
+        .instructions-screen {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            z-index: 10;
+            min-height: 100vh;
+            text-align: center;
+            color: white;
+            padding: 2rem;
         }
-        
-        .video-overlay.hidden {
+
+        .instructions-screen.hidden {
             display: none;
         }
-        
+
+        .instructions-card {
+            background: rgba(255, 255, 255, 0.95);
+            color: #333;
+            padding: 3rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+        }
+
+        .instructions-card h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: #667eea;
+        }
+
+        .instructions-card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+            color: #764ba2;
+        }
+
+        .instruction-list {
+            text-align: left;
+            margin: 2rem 0;
+        }
+
+        .instruction-item {
+            display: flex;
+            align-items: flex-start;
+            margin: 1.5rem 0;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .instruction-icon {
+            font-size: 2rem;
+            margin-right: 1rem;
+            flex-shrink: 0;
+        }
+
+        .instruction-text h3 {
+            margin: 0 0 0.5rem 0;
+            color: #667eea;
+            font-size: 1.1rem;
+        }
+
+        .instruction-text p {
+            margin: 0;
+            color: #666;
+            font-size: 0.95rem;
+        }
+
         .start-btn {
-            padding: 1.5rem 3rem;
+            padding: 1.5rem 4rem;
             font-size: 1.5rem;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
             border-radius: 50px;
             cursor: pointer;
-            font-weight: 600;
-            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+            margin-top: 2rem;
         }
-        
+
         .start-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.6);
         }
-        
+
+        .start-btn:active {
+            transform: translateY(-1px);
+        }
+
         .start-btn:disabled {
-            opacity: 0.5;
+            opacity: 0.6;
             cursor: not-allowed;
             transform: none;
         }
-        
-        .instructions {
-            color: white;
-            text-align: center;
-            margin-bottom: 2rem;
-            max-width: 600px;
+
+        /* Video Screen */
+        .video-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
         }
-        
-        .instructions h2 {
+
+        .video-screen.active {
+            display: flex;
+        }
+
+        #triggerVideo {
+            max-width: 100%;
+            max-height: 100%;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Loading Screen */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            color: white;
+        }
+
+        .loading-screen.active {
+            display: flex;
+        }
+
+        .loading-content {
+            text-align: center;
+        }
+
+        .loading-spinner {
+            width: 80px;
+            height: 80px;
+            border: 8px solid rgba(255, 255, 255, 0.3);
+            border-top: 8px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 2rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-title {
+            font-size: 2rem;
+            font-weight: 700;
             margin-bottom: 1rem;
         }
-        
-        .instructions p {
-            opacity: 0.8;
+
+        .loading-subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 2rem;
+        }
+
+        .loading-stages {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2rem;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 100%;
+        }
+
+        .stage-item {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
             margin: 0.5rem 0;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            transition: all 0.3s ease;
         }
-        
-        .progress-section {
-            margin: 2rem auto;
-            max-width: 960px;
-            padding: 1.5rem;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+
+        .stage-item.active {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
         }
-        
-        .progress-section.hidden {
-            display: none;
+
+        .stage-item.complete {
+            background: rgba(76, 175, 80, 0.3);
         }
-        
+
+        .stage-icon {
+            font-size: 1.5rem;
+            margin-right: 1rem;
+        }
+
+        .stage-text {
+            flex: 1;
+            font-size: 1.1rem;
+        }
+
+        .stage-status {
+            font-size: 1.2rem;
+        }
+
         .progress-bar-container {
             width: 100%;
             height: 8px;
-            background: #e0e0e0;
+            background: rgba(255, 255, 255, 0.2);
             border-radius: 4px;
+            margin-top: 2rem;
             overflow: hidden;
-            margin: 1rem 0;
         }
-        
+
         .progress-bar {
             height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        
-        .stat-card {
-            padding: 1rem;
-            background: #f5f5f5;
-            border-radius: 6px;
-            text-align: center;
-        }
-        
-        .stat-label {
-            font-size: 0.875rem;
-            color: #666;
-            margin-bottom: 0.5rem;
-        }
-        
-        .stat-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #333;
-        }
-        
-        .results-section {
-            margin: 2rem auto;
-            max-width: 960px;
-            padding: 2rem;
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 0%;
+            transition: width 0.5s ease;
+            border-radius: 4px;
         }
-        
-        .results-section.hidden {
+
+        /* Webcam preview (hidden) */
+        #webcamPreview {
             display: none;
-        }
-        
-        .emotion-dist {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin: 1rem 0;
-        }
-        
-        .emotion-badge {
-            padding: 0.5rem 1rem;
-            background: #f0f0f0;
-            border-radius: 20px;
-            font-size: 0.875rem;
-        }
-        
-        .next-btn {
-            margin-top: 2rem;
-            padding: 1rem 2rem;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 1rem;
-            cursor: pointer;
-            font-weight: 600;
-        }
-        
-        .next-btn:hover {
-            background: #5568d3;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Video Analysis Session</h1>
-        <p>Watch the video while we analyze your facial expressions and reactions.</p>
-        
-        <!-- Video Player Section -->
-        <div class="video-container">
-            <video id="triggerVideo" class="trigger-video" preload="auto">
-                <source src="/api/video/trigger" type="video/mp4">
-                Your browser does not support the video tag.
-            </video>
+    <!-- Instructions Screen -->
+    <div id="instructionsScreen" class="instructions-screen">
+        <div class="instructions-card">
+            <h1>📹 Video Analysis</h1>
+            <h2>Stage 3 of 4</h2>
             
-            <!-- Start Overlay -->
-            <div id="startOverlay" class="video-overlay">
-                <div class="instructions">
-                    <h2>Ready to Begin?</h2>
-                    <p>📹 Please ensure your webcam is enabled</p>
-                    <p>🎬 Watch the entire video naturally</p>
-                    <p>📊 We'll analyze your facial expressions in real-time</p>
-                    <p>⏱️ Duration: ~53 seconds</p>
+            <div class="instruction-list">
+                <div class="instruction-item">
+                    <div class="instruction-icon">🎥</div>
+                    <div class="instruction-text">
+                        <h3>Camera Access Required</h3>
+                        <p>We'll need access to your webcam to record your facial expressions</p>
+                    </div>
                 </div>
-                <button id="startBtn" class="start-btn">Start Analysis</button>
+                
+                <div class="instruction-item">
+                    <div class="instruction-icon">🎬</div>
+                    <div class="instruction-text">
+                        <h3>Watch the Video</h3>
+                        <p>A short video (~53 seconds) will play in fullscreen mode</p>
+                    </div>
+                </div>
+                
+                <div class="instruction-item">
+                    <div class="instruction-icon">😊</div>
+                    <div class="instruction-text">
+                        <h3>React Naturally</h3>
+                        <p>Watch the video naturally - we'll analyze your facial expressions</p>
+                    </div>
+                </div>
+                
+                <div class="instruction-item">
+                    <div class="instruction-icon">🤖</div>
+                    <div class="instruction-text">
+                        <h3>AI Processing</h3>
+                        <p>After the video, we'll analyze blinks, gaze, pupil dilation, and emotions</p>
+                    </div>
+                </div>
             </div>
+
+            <button id="startBtn" class="start-btn">Start Analysis</button>
         </div>
-        
-        <!-- Progress Section -->
-        <div id="progressSection" class="progress-section hidden">
-            <h3>Processing Analysis...</h3>
+    </div>
+
+    <!-- Video Screen (Fullscreen) -->
+    <div id="videoScreen" class="video-screen">
+        <video id="triggerVideo" preload="auto" controls>
+            <source src="/api/video/trigger" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+    </div>
+
+    <!-- Hidden webcam preview -->
+    <video id="webcamPreview" autoplay muted playsinline></video>
+
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-title">Processing Your Video</div>
+            <div class="loading-subtitle">Analyzing facial expressions and behavior...</div>
+            
+            <div class="loading-stages">
+                <div class="stage-item" id="stageUpload">
+                    <div class="stage-icon">📤</div>
+                    <div class="stage-text">Uploading video</div>
+                    <div class="stage-status">⏳</div>
+                </div>
+                <div class="stage-item" id="stageBlink">
+                    <div class="stage-icon">👁️</div>
+                    <div class="stage-text">Detecting blinks</div>
+                    <div class="stage-status">⏳</div>
+                </div>
+                <div class="stage-item" id="stageGaze">
+                    <div class="stage-icon">👀</div>
+                    <div class="stage-text">Tracking gaze</div>
+                    <div class="stage-status">⏳</div>
+                </div>
+                <div class="stage-item" id="stagePupil">
+                    <div class="stage-icon">⚫</div>
+                    <div class="stage-text">Analyzing pupil dilation</div>
+                    <div class="stage-status">⏳</div>
+                </div>
+                <div class="stage-item" id="stageEmotion">
+                    <div class="stage-icon">😊</div>
+                    <div class="stage-text">Recognizing emotions (XAI)</div>
+                    <div class="stage-status">⏳</div>
+                </div>
+            </div>
+
             <div class="progress-bar-container">
                 <div id="progressBar" class="progress-bar"></div>
             </div>
-            <p id="progressText">Initializing...</p>
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Frames Processed</div>
-                    <div class="stat-value" id="framesProcessed">0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Blinks Detected</div>
-                    <div class="stat-value" id="blinksDetected">0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Current Emotion</div>
-                    <div class="stat-value" id="currentEmotion">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Gaze Direction</div>
-                    <div class="stat-value" id="gazeDirection">-</div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Results Section -->
-        <div id="resultsSection" class="results-section hidden">
-            <h2>Analysis Complete! ✓</h2>
-            
-            <h3>Summary</h3>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Total Blinks</div>
-                    <div class="stat-value" id="totalBlinks">0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Blink Rate</div>
-                    <div class="stat-value" id="blinkRate">0/min</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Dominant Emotion</div>
-                    <div class="stat-value" id="dominantEmotion">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Attention Score</div>
-                    <div class="stat-value" id="attentionScore">0%</div>
-                </div>
-            </div>
-            
-            <h3>Emotional Distribution</h3>
-            <div id="emotionDistribution" class="emotion-dist"></div>
-            
-            <h3>Gaze Analysis</h3>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Looking Left</div>
-                    <div class="stat-value" id="gazeLeft">0%</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Looking Center</div>
-                    <div class="stat-value" id="gazeCenter">0%</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Looking Right</div>
-                    <div class="stat-value" id="gazeRight">0%</div>
-                </div>
-            </div>
-            
-            <h3>Pupil Dilation</h3>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Average Size</div>
-                    <div class="stat-value" id="avgPupil">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Dilation Events</div>
-                    <div class="stat-value" id="dilationEvents">0</div>
-                </div>
-            </div>
-            
-            <p style="margin-top: 2rem; color: #666; text-align: center;">
-                Analysis data has been saved. You may proceed to view detailed visualizations or AI analysis.
-            </p>
-            
-            <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 2rem;">
-                <button class="next-btn" onclick="window.location.href='/dashboard'">
-                    📊 View Dashboard
-                </button>
-                <button class="next-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);" onclick="alert('AI Analysis coming soon!')">
-                    🤖 AI Analysis
-                </button>
-            </div>
         </div>
     </div>
-    
-    <!-- Hidden canvas for frame extraction -->
-    <canvas id="frameCanvas" style="display: none;"></canvas>
-    
-    <script src="/static/video.js"></script>
+
+    <script src="/static/video.js?v=20251117b"></script>
 </body>
 </html>

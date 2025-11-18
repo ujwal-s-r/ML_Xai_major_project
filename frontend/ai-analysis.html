@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analysis Report - Mental Health Assessment</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Loading State */
+        .loading-screen {
+            background: white;
+            border-radius: 20px;
+            padding: 4rem 2rem;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .spinner {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 2rem;
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-screen h2 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+
+        .loading-screen p {
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        /* Report Display */
+        .report-container {
+            display: none;
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            margin-bottom: 2rem;
+        }
+
+        .report-container.active {
+            display: block;
+        }
+
+        /* Markdown Styling */
+        .report-content {
+            line-height: 1.8;
+            color: #333;
+        }
+
+        .report-content h1 {
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 0.5rem;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .report-content h2 {
+            color: #764ba2;
+            margin-top: 2.5rem;
+            margin-bottom: 1rem;
+            font-size: 1.8rem;
+        }
+
+        .report-content h3 {
+            color: #555;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+            font-size: 1.3rem;
+        }
+
+        .report-content p {
+            margin-bottom: 1rem;
+        }
+
+        .report-content ul, .report-content ol {
+            margin-bottom: 1rem;
+            padding-left: 2rem;
+        }
+
+        .report-content li {
+            margin-bottom: 0.5rem;
+        }
+
+        .report-content strong {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .report-content em {
+            color: #666;
+        }
+
+        .report-content code {
+            background: #f5f5f5;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .report-content pre {
+            background: #f5f5f5;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+
+        .report-content blockquote {
+            border-left: 4px solid #667eea;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: #666;
+            font-style: italic;
+        }
+
+        .report-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        .report-content th, .report-content td {
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+
+        .report-content th {
+            background: #f5f5f5;
+            font-weight: 600;
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #f5f5f5;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #2ecc71;
+            color: white;
+            box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
+        }
+
+        .btn-success:hover {
+            background: #27ae60;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(46, 204, 113, 0.6);
+        }
+
+        /* Error State */
+        .error-screen {
+            display: none;
+            background: white;
+            border-radius: 20px;
+            padding: 3rem;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .error-screen.active {
+            display: block;
+        }
+
+        .error-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .error-screen h2 {
+            color: #e74c3c;
+            margin-bottom: 1rem;
+        }
+
+        .error-screen p {
+            color: #666;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Session Info */
+        .session-info {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+
+        /* Print Styles */
+        @media print {
+            body {
+                background: white;
+            }
+
+            .header, .action-buttons, .session-info {
+                display: none;
+            }
+
+            .report-container {
+                box-shadow: none;
+                padding: 1rem;
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .report-container {
+                padding: 1.5rem;
+            }
+
+            .action-buttons {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 AI-Powered Assessment Analysis</h1>
+            <p>Comprehensive Mental Health Report</p>
+        </div>
+
+        <div class="session-info" id="sessionInfo">
+            <span id="sessionId">Loading...</span>
+        </div>
+
+        <!-- Loading State -->
+        <div class="loading-screen" id="loadingScreen">
+            <div class="spinner"></div>
+            <h2>Generating AI Analysis...</h2>
+            <p>Our advanced AI is analyzing your complete assessment data</p>
+            <p style="font-size: 0.9rem; opacity: 0.8;">This may take 10-30 seconds</p>
+        </div>
+
+        <!-- Error State -->
+        <div class="error-screen" id="errorScreen">
+            <div class="error-icon">⚠️</div>
+            <h2>Analysis Generation Failed</h2>
+            <p id="errorMessage">An error occurred while generating your report.</p>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="retryAnalysis()">🔄 Try Again</button>
+                <a href="/dashboard" class="btn btn-secondary">📊 View Dashboard</a>
+            </div>
+        </div>
+
+        <!-- Report Display -->
+        <div class="report-container" id="reportContainer">
+            <div class="report-content" id="reportContent">
+                <!-- Markdown content will be rendered here -->
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-success" onclick="downloadReport()">📥 Download Report</button>
+                <button class="btn btn-primary" onclick="window.print()">🖨️ Print Report</button>
+                <a href="/dashboard" class="btn btn-secondary">📊 View Dashboard</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Marked.js for Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.0.0/marked.min.js"></script>
+    <script src="/static/ai-analysis.js"></script>
+</body>
+</html>

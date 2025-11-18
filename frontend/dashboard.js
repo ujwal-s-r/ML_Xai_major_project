@@ -1,584 +1,446 @@
 /**
- * Dashboard - Data Visualization
- * Fetches and displays PHQ-8, Game, and Video analysis data
+ * Dashboard - Visualization of Video Analysis Results
+ * Displays continuous timeline data with charts and XAI visualizations
  */
 
 let sessionId = null;
-let data = null;
-let charts = {};
+let analysisData = null;
 
-// Initialize
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('Dashboard loaded');
     
-    // Get session ID from localStorage
+    // Get session ID
     sessionId = localStorage.getItem('session_id');
     if (!sessionId) {
-        showError('No session ID found. Please complete the assessment first.');
+        showError('No session ID found');
         return;
     }
     
-    document.getElementById('sessionId').textContent = sessionId;
+    const sessionElement = document.getElementById('sessionId');
+    if (sessionElement) {
+        sessionElement.textContent = sessionId;
+    }
     
-    // Fetch data
-    await loadData();
+    // Load analysis data
+    await loadAnalysisData();
 });
 
-async function loadData() {
+async function loadAnalysisData() {
     try {
-        const response = await fetch(`/api/results/${sessionId}`);
+        const response = await fetch(`/api/video/results/${sessionId}`);
         
         if (!response.ok) {
-            throw new Error(`Failed to load data: ${response.statusText}`);
+            throw new Error('Failed to load analysis data');
         }
         
-        data = await response.json();
-        console.log('Loaded data:', data);
+        const rawData = await response.json();
+        console.log('Raw data loaded:', rawData);
+        
+        // Check if we have timeline and summary directly (from /api/video/results endpoint)
+        if (rawData.timeline && rawData.summary) {
+            analysisData = {
+                timeline: rawData.timeline || [],
+                summary: rawData.summary || {}
+            };
+        }
+        // Otherwise check for nested video structure (from /api/results endpoint)
+        else if (rawData.video) {
+            analysisData = {
+                timeline: rawData.video.timeline || [],
+                summary: rawData.video.server_summary || {}
+            };
+        }
+        else {
+            throw new Error('No video analysis data found in response');
+        }
+        
+        console.log('Analysis data extracted:', analysisData);
         
         // Hide loading, show dashboard
-        document.getElementById('loadingSection').style.display = 'none';
-        document.getElementById('dashboardContent').style.display = 'grid';
+        const loadingState = document.getElementById('loadingState');
+        const dashboardContent = document.getElementById('dashboardContent');
         
-        // Render all sections
-        renderPHQ8(data.phq8);
-        renderGame(data.game);
-        renderVideo(data.video);
+        if (loadingState) {
+            loadingState.style.display = 'none';
+        }
+        if (dashboardContent) {
+            dashboardContent.style.display = 'block';
+        }
+        
+        // Populate dashboard
+        populateSummary();
+        createCharts();
+        
+        // Show XAI if available
+        if (analysisData.summary.emotion && analysisData.summary.emotion.xai_available) {
+            showXAIVisualizations();
+        }
         
     } catch (error) {
         console.error('Error loading data:', error);
-        showError(error.message);
+        showError('Could not load analysis data. Please try the analysis again.');
     }
 }
 
 function showError(message) {
-    document.getElementById('loadingSection').style.display = 'none';
-    document.getElementById('errorSection').style.display = 'block';
-    document.getElementById('errorMessage').textContent = message;
-}
-
-// ============================================
-// PHQ-8 Rendering
-// ============================================
-
-function renderPHQ8(phq8Data) {
-    if (!phq8Data) {
-        document.getElementById('phq8Section').innerHTML = '<div class="no-data">No PHQ-8 data available</div>';
-        return;
+    const loadingState = document.getElementById('loadingState');
+    const errorState = document.getElementById('errorState');
+    
+    if (loadingState) {
+        loadingState.style.display = 'none';
     }
-    
-    const score = phq8Data.score || 0;
-    const severity = phq8Data.severity || 'Unknown';
-    const answers = phq8Data.answers || [];
-    
-    // Update cards
-    document.getElementById('phq8Score').textContent = score;
-    document.getElementById('phq8Severity').textContent = severity;
-    
-    // Color code severity card
-    const severityCard = document.getElementById('phq8SeverityCard');
-    if (severity === 'None' || severity === 'Mild') {
-        severityCard.classList.add('success');
-    } else if (severity === 'Moderate') {
-        severityCard.classList.add('info');
-    } else {
-        severityCard.classList.add('warning');
-    }
-    
-    // Create bar chart for individual answers
-    const ctx = document.getElementById('phq8Chart').getContext('2d');
-    charts.phq8 = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: [
-                'Q1: Little interest',
-                'Q2: Feeling down',
-                'Q3: Sleep problems',
-                'Q4: Feeling tired',
-                'Q5: Appetite changes',
-                'Q6: Feeling bad',
-                'Q7: Concentration',
-                'Q8: Moving/speaking'
-            ],
-            datasets: [{
-                label: 'Response Score',
-                data: answers,
-                backgroundColor: answers.map(score => {
-                    if (score === 0) return '#43e97b';
-                    if (score === 1) return '#4facfe';
-                    if (score === 2) return '#f093fb';
-                    return '#f5576c';
-                }),
-                borderRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const labels = ['Not at all', 'Several days', 'More than half', 'Nearly every day'];
-                            return labels[context.parsed.y];
-                        }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 3,
-                    ticks: {
-                        stepSize: 1,
-                        callback: function(value) {
-                            const labels = ['Not at all', 'Several days', 'More than half', 'Nearly every day'];
-                            return labels[value];
-                        }
-                    }
-                }
-            }
+    if (errorState) {
+        errorState.style.display = 'block';
+        const errorText = errorState.querySelector('p');
+        if (errorText) {
+            errorText.textContent = message;
         }
-    });
-}
-
-// ============================================
-// Game Rendering
-// ============================================
-
-function renderGame(gameData) {
-    if (!gameData) {
-        document.getElementById('gameSection').innerHTML = '<div class="no-data">No game data available</div>';
-        return;
-    }
-    
-    const summary = gameData.server_summary || gameData.summary || {};
-    
-    // Update metrics
-    document.getElementById('gameAccuracy').textContent = summary.accuracy ? `${summary.accuracy}%` : '-';
-    document.getElementById('gameReactionTime').textContent = summary.avgRt ? `${summary.avgRt}ms` : '-';
-    document.getElementById('gameImpulsive').textContent = summary.impulsive || 0;
-    document.getElementById('gameErrors').textContent = summary.errors || 0;
-    
-    // Render distraction cards
-    const distractionsContainer = document.getElementById('distractionCards');
-    distractionsContainer.innerHTML = '';
-    
-    if (summary.perDistraction && summary.perDistraction.length > 0) {
-        summary.perDistraction.forEach((distraction, index) => {
-            const card = document.createElement('div');
-            card.className = 'distraction-card';
-            
-            const pre = distraction.pre || {};
-            const post = distraction.post || {};
-            
-            const preAcc = pre.acc !== null && pre.acc !== undefined ? Math.round(pre.acc * 100) : 'N/A';
-            const postAcc = post.acc !== null && post.acc !== undefined ? Math.round(post.acc * 100) : 'N/A';
-            const preRt = pre.avgRt || 'N/A';
-            const postRt = post.avgRt || 'N/A';
-            
-            const accChange = (pre.acc !== null && post.acc !== null) ? 
-                (post.acc - pre.acc) * 100 : 0;
-            const accChangeText = accChange > 0 ? 
-                `+${accChange.toFixed(1)}%` : 
-                `${accChange.toFixed(1)}%`;
-            const accChangeColor = accChange >= 0 ? '#43e97b' : '#f5576c';
-            
-            card.innerHTML = `
-                <div class="distraction-header">
-                    <span class="distraction-type">
-                        ${distraction.kind === 'visual' ? '👁️ Visual' : 
-                          distraction.kind === 'auditory' ? '🔊 Auditory' : 
-                          '❓ Other'} Distraction #${index + 1}
-                    </span>
-                    <span style="color: ${accChangeColor}; font-weight: 600;">
-                        ${accChangeText}
-                    </span>
-                </div>
-                <div class="distraction-stats">
-                    <div class="stat-item">
-                        <span>Pre-accuracy:</span>
-                        <strong>${preAcc}${typeof preAcc === 'number' ? '%' : ''}</strong>
-                    </div>
-                    <div class="stat-item">
-                        <span>Post-accuracy:</span>
-                        <strong>${postAcc}${typeof postAcc === 'number' ? '%' : ''}</strong>
-                    </div>
-                    <div class="stat-item">
-                        <span>Pre-RT:</span>
-                        <strong>${preRt}${typeof preRt === 'number' ? 'ms' : ''}</strong>
-                    </div>
-                    <div class="stat-item">
-                        <span>Post-RT:</span>
-                        <strong>${postRt}${typeof postRt === 'number' ? 'ms' : ''}</strong>
-                    </div>
-                </div>
-            `;
-            
-            distractionsContainer.appendChild(card);
-        });
-    } else {
-        distractionsContainer.innerHTML = '<div class="no-data">No distraction data available</div>';
     }
 }
 
-// ============================================
-// Video Rendering
-// ============================================
-
-function renderVideo(videoData) {
-    if (!videoData) {
-        document.getElementById('videoSection').innerHTML = '<div class="no-data">No video data available</div>';
+function populateSummary() {
+    console.log('populateSummary called with:', analysisData);
+    
+    if (!analysisData || !analysisData.summary) {
+        console.error('No analysisData or summary available');
         return;
     }
     
-    const summary = videoData.server_summary || videoData.client_summary || {};
-    const timeline = videoData.timeline || [];
+    const { summary } = analysisData;
+    console.log('Summary object:', summary);
     
-    // Update summary metrics
-    if (summary.emotion) {
-        document.getElementById('videoDominantEmotion').textContent = 
-            summary.emotion.dominant_emotion || '-';
-        document.getElementById('videoEmotionChanges').textContent = 
-            `${summary.emotion.emotion_changes || 0} changes`;
-    }
-    
+    // Blinks
     if (summary.blink) {
-        document.getElementById('videoBlinkRate').textContent = 
-            summary.blink.blink_rate_per_minute || '-';
+        const totalBlinksEl = document.getElementById('totalBlinks');
+        const blinkRateEl = document.getElementById('blinkRate');
+        if (totalBlinksEl) totalBlinksEl.textContent = summary.blink.total_blinks || 0;
+        if (blinkRateEl) blinkRateEl.textContent = `${(summary.blink.blink_rate_per_minute || 0).toFixed(1)} blinks/min`;
     }
     
+    // Emotion
+    if (summary.emotion) {
+        const dominantEmotionEl = document.getElementById('dominantEmotion');
+        const detectionRateEl = document.getElementById('detectionRate');
+        if (dominantEmotionEl) {
+            dominantEmotionEl.textContent = 
+                summary.emotion.dominant_emotion.charAt(0).toUpperCase() + summary.emotion.dominant_emotion.slice(1);
+        }
+        if (detectionRateEl) {
+            detectionRateEl.textContent = 
+                `${(summary.emotion.detection_rate || 0).toFixed(1)}% detection rate`;
+        }
+    }
+    
+    // Gaze
     if (summary.gaze) {
-        const attentionScore = summary.gaze.attention_score || 0;
-        document.getElementById('videoAttention').textContent = 
-            `${Math.round(attentionScore * 100)}%`;
+        const dominantGazeEl = document.getElementById('dominantGaze');
+        const attentionScoreEl = document.getElementById('attentionScore');
+        if (dominantGazeEl) {
+            dominantGazeEl.textContent = 
+                summary.gaze.dominant_direction.charAt(0).toUpperCase() + summary.gaze.dominant_direction.slice(1);
+        }
+        if (attentionScoreEl) {
+            attentionScoreEl.textContent = 
+                `${((summary.gaze.attention_score || 0) * 100).toFixed(0)}% attention`;
+        }
     }
     
+    // Pupil
     if (summary.pupil) {
-        document.getElementById('videoDilations').textContent = 
-            summary.pupil.pupil_dilation_events || 0;
-    }
-    
-    // Render time-series charts
-    renderEmotionTimeline(timeline);
-    renderBlinkTimeline(timeline);
-    renderPupilTimeline(timeline);
-    renderGazeTimeline(timeline);
-    renderEmotionDistribution(summary.emotion);
-}
-
-function renderEmotionTimeline(timeline) {
-    const emotionData = timeline
-        .filter(entry => entry.emotion)
-        .map(entry => ({
-            x: entry.timestamp,
-            emotion: entry.emotion.label,
-            confidence: entry.emotion.confidence
-        }));
-    
-    if (emotionData.length === 0) {
-        return;
-    }
-    
-    // Map emotions to numeric values for visualization
-    const emotionMap = {
-        'sad': 1,
-        'fear': 2,
-        'angry': 3,
-        'disgust': 4,
-        'surprise': 5,
-        'happy': 6,
-        'neutral': 7
-    };
-    
-    const ctx = document.getElementById('emotionTimelineChart').getContext('2d');
-    charts.emotionTimeline = new Chart(ctx, {
-        type: 'line',
-        data: {
-            datasets: [{
-                label: 'Emotion',
-                data: emotionData.map(d => ({
-                    x: d.x,
-                    y: emotionMap[d.emotion] || 0
-                })),
-                borderColor: '#667eea',
-                backgroundColor: 'rgba(102, 126, 234, 0.1)',
-                stepped: true,
-                pointRadius: 4,
-                pointHoverRadius: 6
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const point = emotionData[context.dataIndex];
-                            return `${point.emotion} (${(point.confidence * 100).toFixed(1)}%)`;
-                        }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    min: 0,
-                    max: 8,
-                    ticks: {
-                        callback: function(value) {
-                            const reverseMap = {
-                                1: 'Sad',
-                                2: 'Fear',
-                                3: 'Angry',
-                                4: 'Disgust',
-                                5: 'Surprise',
-                                6: 'Happy',
-                                7: 'Neutral'
-                            };
-                            return reverseMap[value] || '';
-                        }
-                    }
-                }
-            }
+        const avgPupilSizeEl = document.getElementById('avgPupilSize');
+        const dilationEventsEl = document.getElementById('dilationEvents');
+        if (avgPupilSizeEl) avgPupilSizeEl.textContent = (summary.pupil.avg_pupil_size || 0).toFixed(2);
+        if (dilationEventsEl) {
+            dilationEventsEl.textContent = 
+                `${summary.pupil.pupil_dilation_events || 0} dilation events`;
         }
-    });
+    }
+    
+    console.log('populateSummary completed successfully');
 }
 
-function renderBlinkTimeline(timeline) {
-    const blinkData = timeline
-        .filter(entry => entry.blink)
-        .map(entry => ({
-            x: entry.timestamp,
-            y: entry.blink.cumulative_blinks || 0
-        }));
+function createCharts() {
+    console.log('createCharts called');
     
-    if (blinkData.length === 0) {
+    if (!analysisData || !analysisData.timeline || analysisData.timeline.length === 0) {
+        console.error('No timeline data available for charts');
         return;
     }
     
-    const ctx = document.getElementById('blinkTimelineChart').getContext('2d');
-    charts.blinkTimeline = new Chart(ctx, {
-        type: 'line',
-        data: {
-            datasets: [{
-                label: 'Cumulative Blinks',
-                data: blinkData,
-                borderColor: '#43e97b',
-                backgroundColor: 'rgba(67, 233, 123, 0.1)',
-                fill: true,
-                tension: 0.1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    beginAtZero: true,
-                    title: {
-                        display: true,
-                        text: 'Total Blinks'
-                    }
-                }
-            }
-        }
-    });
+    const { timeline } = analysisData;
+    console.log('Timeline length:', timeline.length);
+    
+    // Extract timestamps
+    const timestamps = timeline.map(entry => entry.t.toFixed(1));
+    
+    // 1. Blink Activity Chart
+    createBlinkChart(timestamps, timeline);
+    
+    // 2. Emotion Timeline Chart
+    createEmotionChart(timestamps, timeline);
+    
+    // 3. Gaze Direction Chart
+    createGazeChart(timestamps, timeline);
+    
+    // 4. Pupil Dilation Chart
+    createPupilChart(timestamps, timeline);
+    
+    // 5. Emotion Distribution Pie Chart
+    createEmotionDistributionChart();
+    
+    console.log('All charts created successfully');
 }
 
-function renderPupilTimeline(timeline) {
-    const pupilData = timeline
-        .filter(entry => entry.pupil && entry.pupil.avg)
-        .map(entry => ({
-            x: entry.timestamp,
-            y: entry.pupil.avg
-        }));
+function createBlinkChart(timestamps, timeline) {
+    const ctx = document.getElementById('blinkChart');
+    if (!ctx) return;
     
-    if (pupilData.length === 0) {
-        return;
-    }
+    // Extract EAR values
+    const earData = timeline.map(entry => entry.blink?.avg_ear || null);
+    const blinkEvents = timeline.map(entry => entry.blink?.is_blinking ? 1 : 0);
     
-    const ctx = document.getElementById('pupilTimelineChart').getContext('2d');
-    charts.pupilTimeline = new Chart(ctx, {
+    new Chart(ctx, {
         type: 'line',
         data: {
-            datasets: [{
-                label: 'Pupil Size',
-                data: pupilData,
-                borderColor: '#f093fb',
-                backgroundColor: 'rgba(240, 147, 251, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                }
-            },
-            scales: {
-                x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
-                },
-                y: {
-                    title: {
-                        display: true,
-                        text: 'Pupil Size (normalized)'
-                    }
-                }
-            }
-        }
-    });
-}
-
-function renderGazeTimeline(timeline) {
-    const gazeData = {
-        left: [],
-        center: [],
-        right: []
-    };
-    
-    timeline
-        .filter(entry => entry.gaze)
-        .forEach(entry => {
-            const direction = entry.gaze.direction;
-            gazeData.left.push({
-                x: entry.timestamp,
-                y: direction === 'left' ? 1 : 0
-            });
-            gazeData.center.push({
-                x: entry.timestamp,
-                y: direction === 'center' ? 1 : 0
-            });
-            gazeData.right.push({
-                x: entry.timestamp,
-                y: direction === 'right' ? 1 : 0
-            });
-        });
-    
-    if (gazeData.left.length === 0) {
-        return;
-    }
-    
-    const ctx = document.getElementById('gazeTimelineChart').getContext('2d');
-    charts.gazeTimeline = new Chart(ctx, {
-        type: 'line',
-        data: {
+            labels: timestamps,
             datasets: [
                 {
-                    label: 'Left',
-                    data: gazeData.left,
-                    borderColor: '#f5576c',
-                    backgroundColor: 'rgba(245, 87, 108, 0.3)',
-                    fill: true,
-                    stepped: true
+                    label: 'Eye Aspect Ratio (EAR)',
+                    data: earData,
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y'
                 },
                 {
-                    label: 'Center',
-                    data: gazeData.center,
-                    borderColor: '#43e97b',
-                    backgroundColor: 'rgba(67, 233, 123, 0.3)',
-                    fill: true,
-                    stepped: true
-                },
-                {
-                    label: 'Right',
-                    data: gazeData.right,
-                    borderColor: '#4facfe',
-                    backgroundColor: 'rgba(79, 172, 254, 0.3)',
-                    fill: true,
-                    stepped: true
+                    label: 'Blink Events',
+                    data: blinkEvents,
+                    borderColor: '#e74c3c',
+                    backgroundColor: 'rgba(231, 76, 60, 0.2)',
+                    type: 'bar',
+                    yAxisID: 'y1'
                 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: true
-                }
+            interaction: {
+                mode: 'index',
+                intersect: false
             },
             scales: {
                 x: {
-                    type: 'linear',
-                    title: {
-                        display: true,
-                        text: 'Time (seconds)'
-                    }
+                    title: { display: true, text: 'Time (seconds)' }
                 },
                 y: {
-                    beginAtZero: true,
-                    max: 1,
-                    ticks: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'Gaze Direction'
-                    }
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: { display: true, text: 'EAR Value' }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: 'Blink' },
+                    grid: { drawOnChartArea: false },
+                    max: 1
                 }
             }
         }
     });
 }
 
-function renderEmotionDistribution(emotionSummary) {
-    if (!emotionSummary || !emotionSummary.distribution) {
-        return;
-    }
+function createEmotionChart(timestamps, timeline) {
+    const ctx = document.getElementById('emotionChart');
+    if (!ctx) return;
     
-    const distribution = emotionSummary.distribution;
-    const emotions = Object.keys(distribution);
-    const counts = Object.values(distribution);
+    // Map emotions to numeric codes for visualization
+    const emotionMap = {
+        'sad': 0, 'disgust': 1, 'angry': 2, 'neutral': 3, 
+        'fear': 4, 'surprise': 5, 'happy': 6
+    };
     
-    const ctx = document.getElementById('emotionDistributionChart').getContext('2d');
-    charts.emotionDistribution = new Chart(ctx, {
+    const emotionData = timeline.map(entry => {
+        const emotion = entry.emotion?.dominant_emotion;
+        return emotion ? emotionMap[emotion] : null;
+    });
+    
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: timestamps,
+            datasets: [{
+                label: 'Emotion',
+                data: emotionData,
+                borderColor: '#764ba2',
+                backgroundColor: 'rgba(118, 75, 162, 0.1)',
+                stepped: true,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    title: { display: true, text: 'Time (seconds)' }
+                },
+                y: {
+                    title: { display: true, text: 'Emotion' },
+                    ticks: {
+                        callback: function(value) {
+                            const emotions = ['Sad', 'Disgust', 'Angry', 'Neutral', 'Fear', 'Surprise', 'Happy'];
+                            return emotions[value] || '';
+                        }
+                    },
+                    min: 0,
+                    max: 6
+                }
+            }
+        }
+    });
+}
+
+function createGazeChart(timestamps, timeline) {
+    const ctx = document.getElementById('gazeChart');
+    if (!ctx) return;
+    
+    // Map gaze directions to numeric values
+    const gazeMap = { 'left': -1, 'center': 0, 'right': 1 };
+    const gazeData = timeline.map(entry => {
+        const direction = entry.gaze?.gaze_direction;
+        return direction ? gazeMap[direction] : 0;
+    });
+    
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: timestamps,
+            datasets: [{
+                label: 'Gaze Direction',
+                data: gazeData,
+                borderColor: '#3498db',
+                backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                stepped: true,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    title: { display: true, text: 'Time (seconds)' }
+                },
+                y: {
+                    title: { display: true, text: 'Direction' },
+                    ticks: {
+                        callback: function(value) {
+                            if (value === -1) return 'Left';
+                            if (value === 0) return 'Center';
+                            if (value === 1) return 'Right';
+                            return '';
+                        }
+                    },
+                    min: -1,
+                    max: 1
+                }
+            }
+        }
+    });
+}
+
+function createPupilChart(timestamps, timeline) {
+    const ctx = document.getElementById('pupilChart');
+    if (!ctx) return;
+    
+    const pupilData = timeline.map(entry => entry.pupil?.avg_pupil_size || null);
+    const dilationRatio = timeline.map(entry => entry.pupil?.pupil_dilation_ratio || null);
+    
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: timestamps,
+            datasets: [
+                {
+                    label: 'Avg Pupil Size (px)',
+                    data: pupilData,
+                    borderColor: '#2ecc71',
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Dilation Ratio',
+                    data: dilationRatio,
+                    borderColor: '#f39c12',
+                    backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                    tension: 0.4,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Time (seconds)' }
+                },
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: { display: true, text: 'Size (pixels)' }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: 'Ratio' },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    });
+}
+
+function createEmotionDistributionChart() {
+    const ctx = document.getElementById('emotionDistChart');
+    if (!ctx) return;
+    
+    const distribution = analysisData.summary.emotion?.distribution || {};
+    const labels = Object.keys(distribution).map(e => 
+        e.charAt(0).toUpperCase() + e.slice(1)
+    );
+    const data = Object.values(distribution);
+    
+    const colors = [
+        '#3498db', // sad
+        '#9b59b6', // disgust
+        '#e74c3c', // angry
+        '#95a5a6', // neutral
+        '#f39c12', // fear
+        '#f1c40f', // surprise
+        '#2ecc71'  // happy
+    ];
+    
+    new Chart(ctx, {
         type: 'doughnut',
         data: {
-            labels: emotions.map(e => e.charAt(0).toUpperCase() + e.slice(1)),
+            labels: labels,
             datasets: [{
-                data: counts,
-                backgroundColor: [
-                    '#667eea',
-                    '#764ba2',
-                    '#f093fb',
-                    '#f5576c',
-                    '#4facfe',
-                    '#43e97b',
-                    '#38f9d7'
-                ]
+                data: data,
+                backgroundColor: colors,
+                borderWidth: 2,
+                borderColor: '#fff'
             }]
         },
         options: {
@@ -591,4 +453,47 @@ function renderEmotionDistribution(emotionSummary) {
             }
         }
     });
+}
+
+function showXAIVisualizations() {
+    const xaiSection = document.getElementById('xaiSection');
+    const xaiGrid = document.getElementById('xaiGrid');
+    
+    const xaiFrames = analysisData.summary.emotion.xai_frames || [];
+    
+    if (xaiFrames.length === 0) {
+        return;
+    }
+    
+    xaiSection.style.display = 'block';
+    
+    // Create XAI frame thumbnails
+    xaiFrames.forEach(frameIdx => {
+        const entry = analysisData.timeline[frameIdx];
+        if (!entry || !entry.emotion?.has_xai) return;
+        
+        const frameDiv = document.createElement('div');
+        frameDiv.className = 'xai-frame';
+        frameDiv.innerHTML = `
+            <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #f8f9fa;">
+                <div style="text-align: center; padding: 1rem;">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
+                    <div style="font-size: 0.9rem; color: #666;">Frame ${frameIdx}</div>
+                    <div style="font-size: 0.8rem; color: #999; margin-top: 0.5rem;">
+                        ${entry.emotion.dominant_emotion}
+                    </div>
+                </div>
+            </div>
+            <div class="frame-label">
+                t=${entry.t.toFixed(1)}s | ${entry.emotion.dominant_emotion}
+            </div>
+        `;
+        
+        frameDiv.onclick = () => showXAIDetail(frameIdx, entry);
+        xaiGrid.appendChild(frameDiv);
+    });
+}
+
+function showXAIDetail(frameIdx, entry) {
+    alert(`XAI Detail for Frame ${frameIdx}\n\nEmotion: ${entry.emotion.dominant_emotion}\nTime: ${entry.t.toFixed(1)}s\n\nAttention Map: ${entry.emotion.xai?.attention_map ? 'Available' : 'N/A'}\nGrad-CAM: ${entry.emotion.xai?.gradcam_heatmap ? 'Available' : 'N/A'}\n\n(Detailed XAI viewer coming soon!)`);
 }

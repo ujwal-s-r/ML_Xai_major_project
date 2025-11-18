@@ -29,8 +29,8 @@ class BlinkDetector:
         self.RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
         
         # Blink detection parameters
-        self.EAR_THRESHOLD = 0.2  # Threshold for considering an eye closed
-        self.CONSEC_FRAMES_THRESHOLD = 2  # Number of consecutive frames for a blink
+        self.EAR_THRESHOLD = 0.25  # Threshold for considering an eye closed (0.2-0.3 range per research)
+        self.CONSEC_FRAMES_THRESHOLD = 1  # Number of consecutive frames for a blink (blinks are very fast)
         
         # For tracking blinks
         self.blink_counter = 0
@@ -197,11 +197,8 @@ class BlinkDetector:
                     # For longer recordings, use standard calculation
                     blink_rate = (self.blink_counter / video_duration) * 60.0
             else:
-                # Fallback to real-time calculation (prevent division by zero)
-                if elapsed_time > 0:
-                    blink_rate = (self.blink_counter / elapsed_time) * 60.0
-                else:
-                    blink_rate = 0.0
+                # Fallback to real-time calculation
+                blink_rate = (self.blink_counter / elapsed_time) * 60.0
                 
             # Cap unreasonably high blink rates (normal human range is 15-30 blinks/min)
             blink_rate = min(blink_rate, 40.0)

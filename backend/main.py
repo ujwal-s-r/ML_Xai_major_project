@@ -9,16 +9,17 @@ from typing import List, Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-# Import video analyzer
+# Import video analyzer and AI analyzer
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from processors.batch_video_analyzer import BatchVideoAnalyzer
+from processors.video_pipeline import VideoAnalysisPipeline
+from processors.gemini_analyzer import GeminiAnalyzer
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -42,15 +43,24 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 # Initialize Video Analyzer (singleton for all requests)
-video_analyzer = None
+video_pipeline = None
+gemini_analyzer = None
 
-def get_video_analyzer():
-    """Lazy-load video analyzer to avoid startup delay."""
-    global video_analyzer
-    if video_analyzer is None:
-        print("Initializing Batch Video Analyzer...")
-        video_analyzer = BatchVideoAnalyzer()
-    return video_analyzer
+def get_video_pipeline():
+    """Lazy-load video pipeline to avoid startup delay."""
+    global video_pipeline
+    if video_pipeline is None:
+        print("Initializing Video Analysis Pipeline...")
+        video_pipeline = VideoAnalysisPipeline()
+    return video_pipeline
+
+def get_gemini_analyzer():
+    """Lazy-load Gemini AI analyzer."""
+    global gemini_analyzer
+    if gemini_analyzer is None:
+        print("Initializing Gemini AI Analyzer...")
+        gemini_analyzer = GeminiAnalyzer()
+    return gemini_analyzer
 
 
 class PHQ8Submission(BaseModel):
@@ -304,6 +314,8 @@ async def submit_game(payload: GameSubmission):
 VIDEO_RESULTS_PATH = DATA_DIR / "video_results.jsonl"
 VIDEO_DIR = DATA_DIR / "video"
 VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR = DATA_DIR / "temp"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class VideoSubmission(BaseModel):
@@ -324,15 +336,24 @@ async def serve_video_page():
     return FileResponse(video_html_path)
 
 
+@app.get("/dashboard")
+async def serve_dashboard_page():
+    """Serve the dashboard visualization page."""
+    dashboard_html_path = FRONTEND_DIR / "dashboard.html"
+    if not dashboard_html_path.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return FileResponse(dashboard_html_path)
+
+
 @app.post("/api/video/start-session")
 async def start_video_session():
     """
     Start a new video analysis session.
-    Resets the analyzer's state.
+    Resets the pipeline's state.
     """
     try:
-        analyzer = get_video_analyzer()
-        # BatchVideoAnalyzer doesn't need start_analysis, it processes in batch
+        pipeline = get_video_pipeline()
+        pipeline.reset()
         return {"status": "started", "message": "Video analysis session ready"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start session: {str(e)}")
@@ -358,52 +379,84 @@ class BatchFramesRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-@app.post("/api/video/process-batch")
-async def process_video_batch(request: BatchFramesRequest):
+@app.post("/api/video/upload-and-process")
+async def upload_and_process_video(
+    session_id: str = Form(...),
+    video_file: UploadFile = File(...)
+):
     """
-    Process a batch of frames sequentially through all models.
-    This replaces the per-frame processing.
+    Upload webcam recording and process through video analysis pipeline.
     
-    Returns complete timeline and summary after processing all frames.
+    This endpoint:
+    1. Saves the uploaded video file
+    2. Extracts frames
+    3. Processes through all ML models (blink, emotion, pupil, gaze)
+    4. Returns timeline and summary data
     """
+    temp_video_path = None
+    
     try:
         print(f"\n{'='*60}")
-        print(f"Received batch: {len(request.frames_base64)} frames @ {request.fps} FPS")
+        print(f"[API] Video upload received for session: {session_id}")
+        print(f"[API] File: {video_file.filename}, Type: {video_file.content_type}")
         print(f"{'='*60}")
         
-        # Decode all frames
-        frames = []
-        for idx, frame_b64 in enumerate(request.frames_base64):
-            img_data = base64.b64decode(frame_b64.split(',')[1] if ',' in frame_b64 else frame_b64)
-            nparr = np.frombuffer(img_data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            if frame is None:
-                print(f"⚠️ Warning: Frame {idx} failed to decode")
-                continue
-            
-            frames.append(frame)
+        # Save uploaded file to temp directory
+        import uuid
+        temp_filename = f"{session_id}_{uuid.uuid4().hex[:8]}.webm"
+        temp_video_path = TEMP_DIR / temp_filename
         
-        print(f"Successfully decoded {len(frames)} frames")
+        # Write uploaded file
+        with open(temp_video_path, "wb") as f:
+            content = await video_file.read()
+            f.write(content)
         
-        # Get analyzer and process batch
-        analyzer = get_video_analyzer()
-        analyzer.set_frames(frames, request.fps)
+        file_size_mb = len(content) / (1024 * 1024)
+        print(f"[API] Saved video: {temp_video_path} ({file_size_mb:.2f} MB)")
         
-        # Process all frames sequentially
-        results = analyzer.process_all_sequential()
+        # Get pipeline and process video
+        pipeline = get_video_pipeline()
+        # Ensure clean state per upload to avoid stale state issues
+        try:
+            pipeline.reset()
+        except Exception:
+            pass
+        results = pipeline.process_video_file(str(temp_video_path))
         
-        print(f"\n✓ Batch processing complete!")
-        print(f"  Timeline entries: {len(results['timeline'])}")
-        print(f"  Summary generated: {bool(results['summary'])}\n")
+        print(f"[API] ✓ Processing complete")
+        print(f"[API]   Timeline entries: {len(results['timeline'])}")
+        print(f"[API]   Blinks detected: {results['summary']['blink']['total_blinks']}")
+        print(f"{'='*60}\n")
         
         return results
         
     except Exception as e:
-        print(f"Error processing batch: {e}")
+        print(f"[API] Error processing video: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Video processing failed: {str(e)}")
+    
+    finally:
+        # Clean up temp file
+        if temp_video_path and temp_video_path.exists():
+            try:
+                temp_video_path.unlink()
+                print(f"[API] Cleaned up temp file: {temp_filename}")
+            except Exception as e:
+                print(f"[API] Warning: Could not delete temp file: {e}")
+
+
+@app.post("/api/video/process-batch")
+async def process_video_batch(request: BatchFramesRequest):
+    """
+    Process a batch of frames sequentially through all models.
+    DEPRECATED: Use /api/video/upload-and-process instead.
+    """
+    # This endpoint is deprecated
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint is deprecated. Use /api/video/upload-and-process instead"
+    )
 
 
 @app.post("/api/video/submit")
@@ -450,6 +503,57 @@ async def serve_dashboard_page():
     if not dashboard_path.exists():
         raise HTTPException(status_code=404, detail="dashboard.html not found")
     return FileResponse(dashboard_path)
+
+
+@app.get("/ai-analysis")
+async def serve_ai_analysis_page():
+    """Serve the AI analysis report page."""
+    ai_analysis_path = FRONTEND_DIR / "ai-analysis.html"
+    if not ai_analysis_path.exists():
+        raise HTTPException(status_code=404, detail="ai-analysis.html not found")
+    return FileResponse(ai_analysis_path)
+
+
+@app.get("/api/video/results/{session_id}")
+async def get_video_results(session_id: str):
+    """
+    Retrieve video analysis results for a specific session.
+    Reads from video_results.jsonl and returns the most recent entry for the session.
+    """
+    try:
+        if not VIDEO_RESULTS_PATH.exists():
+            raise HTTPException(status_code=404, detail="No video results found")
+        
+        # Read all results and find matching session
+        results = []
+        with open(VIDEO_RESULTS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    record = json.loads(line)
+                    if record.get("session_id") == session_id:
+                        results.append(record)
+        
+        if not results:
+            raise HTTPException(status_code=404, detail=f"No results found for session {session_id}")
+        
+        # Return most recent result
+        latest_result = results[-1]
+        
+        return {
+            "session_id": latest_result["session_id"],
+            "timestamp": latest_result["timestamp"],
+            "duration_seconds": latest_result["duration_seconds"],
+            "timeline": latest_result["timeline"],
+            "summary": latest_result["server_summary"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error retrieving results: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve results: {str(e)}")
 
 
 @app.get("/api/results/{session_id}")
@@ -506,6 +610,106 @@ async def get_session_results(session_id: str):
         raise HTTPException(status_code=404, detail=f"No data found for session {session_id}")
     
     return results
+
+
+@app.post("/api/ai-analysis/generate")
+async def generate_ai_analysis(session_id: str = Form(...)):
+    """
+    Generate AI-powered comprehensive assessment report using Gemini.
+    
+    Args:
+        session_id: Session ID to analyze
+        
+    Returns:
+        Markdown-formatted assessment report
+    """
+    try:
+        print(f"\n{'='*60}")
+        print(f"[API] AI Analysis requested for session: {session_id}")
+        print(f"{'='*60}")
+        
+        # Fetch all session data
+        results = {
+            "phq8": None,
+            "game": None,
+            "video": None
+        }
+        
+        # Read PHQ-8 results
+        if RESULTS_PATH.exists():
+            try:
+                with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+                    for line in f:
+                        record = json.loads(line.strip())
+                        if record.get("session_id") == session_id:
+                            results["phq8"] = record
+                            break
+            except Exception as e:
+                print(f"[API] Error reading PHQ-8 results: {e}")
+        
+        # Read game results
+        if GAME_RESULTS_PATH.exists():
+            try:
+                with open(GAME_RESULTS_PATH, "r", encoding="utf-8") as f:
+                    for line in f:
+                        record = json.loads(line.strip())
+                        if record.get("session_id") == session_id:
+                            results["game"] = record
+                            break
+            except Exception as e:
+                print(f"[API] Error reading game results: {e}")
+        
+        # Read video results
+        if VIDEO_RESULTS_PATH.exists():
+            try:
+                with open(VIDEO_RESULTS_PATH, "r", encoding="utf-8") as f:
+                    for line in f:
+                        record = json.loads(line.strip())
+                        if record.get("session_id") == session_id:
+                            results["video"] = record
+                            break
+            except Exception as e:
+                print(f"[API] Error reading video results: {e}")
+        
+        # Check if any data was found
+        if not any([results["phq8"], results["game"], results["video"]]):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No assessment data found for session {session_id}"
+            )
+        
+        print(f"[API] Data retrieved:")
+        print(f"[API]   PHQ-8: {'✓' if results['phq8'] else '✗'}")
+        print(f"[API]   Game: {'✓' if results['game'] else '✗'}")
+        print(f"[API]   Video: {'✓' if results['video'] else '✗'}")
+        
+        # Generate AI report
+        analyzer = get_gemini_analyzer()
+        report = analyzer.generate_assessment_report(
+            phq8_data=results["phq8"],
+            game_data=results["game"],
+            video_data=results["video"]
+        )
+        
+        print(f"[API] ✓ AI Report generated successfully")
+        print(f"{'='*60}\n")
+        
+        return {
+            "session_id": session_id,
+            "report": report,
+            "generated_at": datetime.utcnow().isoformat() + "Z"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[API] Error generating AI analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate AI analysis: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
