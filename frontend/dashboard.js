@@ -28,17 +28,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadAnalysisData() {
     try {
+        console.log('[Dashboard] Fetching data for session:', sessionId);
         const response = await fetch(`/api/video/results/${sessionId}`);
         
+        console.log('[Dashboard] Response status:', response.status);
         if (!response.ok) {
-            throw new Error('Failed to load analysis data');
+            const errorText = await response.text();
+            console.error('[Dashboard] Response error:', errorText);
+            throw new Error(`Failed to load analysis data: ${response.status}`);
         }
         
         const rawData = await response.json();
-        console.log('Raw data loaded:', rawData);
+        console.log('[Dashboard] Raw data loaded:', rawData);
+        console.log('[Dashboard] Has timeline?', !!rawData.timeline);
+        console.log('[Dashboard] Has summary?', !!rawData.summary);
+        console.log('[Dashboard] Timeline length:', rawData.timeline?.length);
+        console.log('[Dashboard] Summary object:', JSON.stringify(rawData.summary));
+        console.log('[Dashboard] Summary keys:', rawData.summary ? Object.keys(rawData.summary) : 'NO SUMMARY');
         
         // Check if we have timeline and summary directly (from /api/video/results endpoint)
-        if (rawData.timeline && rawData.summary) {
+        if (rawData.timeline && rawData.summary && Object.keys(rawData.summary).length > 0) {
+            console.log('[Dashboard] Using direct structure');
             analysisData = {
                 timeline: rawData.timeline || [],
                 summary: rawData.summary || {}
@@ -46,16 +56,22 @@ async function loadAnalysisData() {
         }
         // Otherwise check for nested video structure (from /api/results endpoint)
         else if (rawData.video) {
+            console.log('[Dashboard] Using nested video structure');
             analysisData = {
                 timeline: rawData.video.timeline || [],
                 summary: rawData.video.server_summary || {}
             };
         }
         else {
+            console.error('[Dashboard] Data structure not recognized');
+            console.error('[Dashboard] rawData keys:', Object.keys(rawData));
+            console.error('[Dashboard] summary is empty?', rawData.summary && Object.keys(rawData.summary).length === 0);
             throw new Error('No video analysis data found in response');
         }
         
-        console.log('Analysis data extracted:', analysisData);
+        console.log('[Dashboard] Analysis data extracted successfully');
+        console.log('[Dashboard] Timeline entries:', analysisData.timeline.length);
+        console.log('[Dashboard] Summary keys:', Object.keys(analysisData.summary));
         
         // Hide loading, show dashboard
         const loadingState = document.getElementById('loadingState');

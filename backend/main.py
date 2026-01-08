@@ -539,12 +539,26 @@ async def get_video_results(session_id: str):
         # Return most recent result
         latest_result = results[-1]
         
+        summary = latest_result.get("server_summary", {})
+        
+        print(f"[API] Returning video results for session {session_id}")
+        print(f"[API]   Keys in record: {latest_result.keys()}")
+        print(f"[API]   Has server_summary: {'server_summary' in latest_result}")
+        print(f"[API]   Timeline length: {len(latest_result.get('timeline', []))}")
+        print(f"[API]   Summary keys: {list(summary.keys()) if summary else 'EMPTY'}")
+        
+        # Check if summary has actual data
+        if not summary or not any(summary.values()):
+            print(f"[API] WARNING: Summary is empty for session {session_id}!")
+            print(f"[API]          This likely means the video was processed with errors.")
+            print(f"[API]          Please re-run the video analysis.")
+        
         return {
-            "session_id": latest_result["session_id"],
-            "timestamp": latest_result["timestamp"],
-            "duration_seconds": latest_result["duration_seconds"],
-            "timeline": latest_result["timeline"],
-            "summary": latest_result["server_summary"]
+            "session_id": latest_result.get("session_id"),
+            "timestamp": latest_result.get("timestamp"),
+            "duration_seconds": latest_result.get("duration_seconds", 0),
+            "timeline": latest_result.get("timeline", []),
+            "summary": summary
         }
         
     except HTTPException:

@@ -33,8 +33,8 @@ class GeminiAnalyzer:
         
         genai.configure(api_key=api_key)
         
-        # Use Gemini 2.0 Flash model
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        # Use Gemini 2.0 Flash Exp model
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         
         print("[GeminiAnalyzer] Initialized with gemini-2.0-flash-exp model")
     
