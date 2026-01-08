@@ -63,7 +63,7 @@ class BlinkCounterProcessor:
         
         # Process each frame
         for frame_idx, frame in enumerate(frames):
-            timestamp = frame_idx / fps
+            timestamp = frame_idx / fps if fps > 0 else 0
             
             # Detect blink in this frame
             blink_data = self.detector.detect_blink(frame)
@@ -87,7 +87,7 @@ class BlinkCounterProcessor:
         
         # Compute summary statistics
         total_blinks = self.detector.blink_counter
-        duration_seconds = len(frames) / fps
+        duration_seconds = len(frames) / fps if fps > 0 else 0
         
         # Calculate blink rate
         if duration_seconds > 0:

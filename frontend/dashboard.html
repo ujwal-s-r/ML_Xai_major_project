@@ -121,40 +121,129 @@
 
         .xai-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 1rem;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+            max-width: 900px;
+            margin: 0 auto;
         }
 
         .xai-frame {
             position: relative;
-            aspect-ratio: 1;
-            background: #f0f0f0;
-            border-radius: 8px;
+            background: #f8f9fa;
+            border-radius: 12px;
             overflow: hidden;
-            cursor: pointer;
-            transition: transform 0.2s;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
 
         .xai-frame:hover {
-            transform: scale(1.05);
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
 
-        .xai-frame img {
+        .xai-frame-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .xai-frame-content {
+            padding: 1rem;
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+        }
+
+        .xai-canvas-container {
+            position: relative;
+            width: 150px;
+            height: 150px;
+            flex-shrink: 0;
+        }
+
+        .xai-canvas-container canvas {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
         }
 
-        .xai-frame .frame-label {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: rgba(0,0,0,0.7);
+        .xai-info {
+            flex: 1;
+            font-size: 0.85rem;
+        }
+
+        .xai-info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .xai-info-row:last-child {
+            border-bottom: none;
+        }
+
+        .xai-info-label {
+            color: #666;
+            font-weight: 500;
+        }
+
+        .xai-info-value {
+            color: #333;
+            font-weight: 600;
+        }
+
+        .xai-legend {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #eee;
+        }
+
+        .xai-legend-gradient {
+            width: 100px;
+            height: 12px;
+            background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000);
+            border-radius: 3px;
+        }
+
+        .xai-legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.7rem;
+            color: #999;
+            width: 100px;
+        }
+
+        .xai-type-toggle {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .xai-type-btn {
+            padding: 0.3rem 0.6rem;
+            font-size: 0.75rem;
+            border: 1px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .xai-type-btn.active {
+            background: #667eea;
             color: white;
-            padding: 0.5rem;
-            font-size: 0.8rem;
-            text-align: center;
+        }
+
+        .xai-type-btn:hover:not(.active) {
+            background: #f0f3ff;
         }
 
         .loading {
@@ -311,10 +400,22 @@
 
             <!-- XAI Visualizations -->
             <div class="xai-section" id="xaiSection" style="display: none;">
-                <h3>🔍 Explainable AI (XAI) - Attention & Grad-CAM</h3>
-                <p style="color: #666; margin-bottom: 1.5rem;">
+                <h3>🔍 Explainable AI (XAI) - Attention Maps & Grad-CAM</h3>
+                <p style="color: #666; margin-bottom: 1rem;">
                     These heatmaps show which facial regions the AI model focused on when making emotion predictions.
+                    <strong>Red/Yellow = High attention</strong>, <strong>Blue/Green = Low attention</strong>.
                 </p>
+                <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; padding: 0.75rem; background: #f8f9fa; border-radius: 8px;">
+                    <span style="font-size: 0.9rem; color: #666;">View Mode:</span>
+                    <button id="xaiModeAttention" class="xai-type-btn active" onclick="setXAIMode('attention')">Attention Map</button>
+                    <button id="xaiModeGradcam" class="xai-type-btn" onclick="setXAIMode('gradcam')">Grad-CAM</button>
+                    <div style="flex: 1;"></div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-size: 0.75rem; color: #999;">Low</span>
+                        <div style="width: 120px; height: 12px; background: linear-gradient(to right, #0000ff, #00ffff, #00ff00, #ffff00, #ff0000); border-radius: 3px;"></div>
+                        <span style="font-size: 0.75rem; color: #999;">High</span>
+                    </div>
+                </div>
                 <div class="xai-grid" id="xaiGrid"></div>
             </div>
         </div>

@@ -471,45 +471,240 @@ function createEmotionDistributionChart() {
     });
 }
 
+// XAI visualization mode
+let currentXAIMode = 'attention';
+
 function showXAIVisualizations() {
     const xaiSection = document.getElementById('xaiSection');
     const xaiGrid = document.getElementById('xaiGrid');
     
-    const xaiFrames = analysisData.summary.emotion.xai_frames || [];
+    const xaiFrames = analysisData.summary.emotion?.xai_frames || [];
     
     if (xaiFrames.length === 0) {
+        console.log('[XAI] No XAI frames available');
         return;
     }
     
+    console.log('[XAI] Rendering', xaiFrames.length, 'XAI frames');
     xaiSection.style.display = 'block';
+    xaiGrid.innerHTML = ''; // Clear existing content
     
-    // Create XAI frame thumbnails
-    xaiFrames.forEach(frameIdx => {
+    // Create XAI frame cards
+    xaiFrames.forEach((frameIdx, index) => {
         const entry = analysisData.timeline[frameIdx];
-        if (!entry || !entry.emotion?.has_xai) return;
+        if (!entry || !entry.emotion?.has_xai) {
+            console.log('[XAI] Skipping frame', frameIdx, '- no XAI data');
+            return;
+        }
         
         const frameDiv = document.createElement('div');
         frameDiv.className = 'xai-frame';
+        frameDiv.id = `xai-frame-${frameIdx}`;
+        
+        // Get position label
+        const positionLabels = ['Early (25%)', 'Mid (50%)', 'Late (75%)', 'Peak Emotion'];
+        const positionLabel = positionLabels[index] || `Frame ${index + 1}`;
+        
         frameDiv.innerHTML = `
-            <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #f8f9fa;">
-                <div style="text-align: center; padding: 1rem;">
-                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
-                    <div style="font-size: 0.9rem; color: #666;">Frame ${frameIdx}</div>
-                    <div style="font-size: 0.8rem; color: #999; margin-top: 0.5rem;">
-                        ${entry.emotion.dominant_emotion}
+            <div class="xai-frame-header">
+                ${positionLabel} - Frame #${frameIdx}
+            </div>
+            <div class="xai-frame-content">
+                <div class="xai-canvas-container">
+                    <canvas id="xai-canvas-${frameIdx}" width="150" height="150"></canvas>
+                </div>
+                <div class="xai-info">
+                    <div class="xai-info-row">
+                        <span class="xai-info-label">Time</span>
+                        <span class="xai-info-value">${entry.t.toFixed(2)}s</span>
+                    </div>
+                    <div class="xai-info-row">
+                        <span class="xai-info-label">Emotion</span>
+                        <span class="xai-info-value">${capitalizeFirst(entry.emotion.dominant_emotion)}</span>
+                    </div>
+                    <div class="xai-info-row">
+                        <span class="xai-info-label">Confidence</span>
+                        <span class="xai-info-value">${(entry.emotion.emotions[entry.emotion.dominant_emotion] || 0).toFixed(1)}%</span>
+                    </div>
+                    <div class="xai-info-row">
+                        <span class="xai-info-label">Grid Size</span>
+                        <span class="xai-info-value">${entry.attention_grid_size || 14}×${entry.attention_grid_size || 14}</span>
                     </div>
                 </div>
             </div>
-            <div class="frame-label">
-                t=${entry.t.toFixed(1)}s | ${entry.emotion.dominant_emotion}
-            </div>
         `;
         
-        frameDiv.onclick = () => showXAIDetail(frameIdx, entry);
         xaiGrid.appendChild(frameDiv);
+        
+        // Render the heatmap on canvas after adding to DOM
+        setTimeout(() => {
+            renderXAICanvas(frameIdx, entry, currentXAIMode);
+        }, 50);
     });
 }
 
+function capitalizeFirst(str) {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function setXAIMode(mode) {
+    currentXAIMode = mode;
+    
+    // Update button states
+    document.getElementById('xaiModeAttention').classList.toggle('active', mode === 'attention');
+    document.getElementById('xaiModeGradcam').classList.toggle('active', mode === 'gradcam');
+    
+    // Re-render all XAI canvases
+    const xaiFrames = analysisData.summary.emotion?.xai_frames || [];
+    xaiFrames.forEach(frameIdx => {
+        const entry = analysisData.timeline[frameIdx];
+        if (entry && entry.emotion?.has_xai) {
+            renderXAICanvas(frameIdx, entry, mode);
+        }
+    });
+}
+
+function renderXAICanvas(frameIdx, entry, mode) {
+    const canvas = document.getElementById(`xai-canvas-${frameIdx}`);
+    if (!canvas) {
+        console.log('[XAI] Canvas not found for frame', frameIdx);
+        return;
+    }
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Clear canvas
+    ctx.fillStyle = '#f0f0f0';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Get heatmap data based on mode
+    let heatmapData = null;
+    if (mode === 'attention' && entry.attention_map) {
+        heatmapData = entry.attention_map;
+    } else if (mode === 'gradcam' && entry.gradcam_heatmap) {
+        heatmapData = entry.gradcam_heatmap;
+    }
+    
+    // Check for XAI data in emotion.xai object (video_pipeline format)
+    if (!heatmapData && entry.emotion?.xai) {
+        if (mode === 'attention' && entry.emotion.xai.attention_map) {
+            heatmapData = entry.emotion.xai.attention_map;
+        } else if (mode === 'gradcam' && entry.emotion.xai.gradcam_heatmap) {
+            heatmapData = entry.emotion.xai.gradcam_heatmap;
+        }
+    }
+    
+    if (!heatmapData) {
+        // Draw placeholder
+        ctx.fillStyle = '#ddd';
+        ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#999';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`No ${mode} data`, width / 2, height / 2);
+        return;
+    }
+    
+    // Get face image if available
+    const faceBase64 = entry.face_image_base64;
+    
+    if (faceBase64) {
+        // Load face image first, then overlay heatmap
+        const img = new Image();
+        img.onload = () => {
+            // Draw face image
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Overlay heatmap with transparency
+            overlayHeatmap(ctx, heatmapData, width, height, 0.5);
+        };
+        img.onerror = () => {
+            console.log('[XAI] Failed to load face image for frame', frameIdx);
+            // Just draw heatmap without face
+            overlayHeatmap(ctx, heatmapData, width, height, 1.0);
+        };
+        img.src = `data:image/jpeg;base64,${faceBase64}`;
+    } else {
+        // No face image, just draw heatmap
+        overlayHeatmap(ctx, heatmapData, width, height, 1.0);
+    }
+}
+
+function overlayHeatmap(ctx, heatmapData, width, height, alpha) {
+    // heatmapData is a 2D array (e.g., 14x14 or 150x150)
+    const gridSize = heatmapData.length;
+    const cellWidth = width / gridSize;
+    const cellHeight = height / gridSize;
+    
+    // Create temporary canvas for heatmap
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    // Draw heatmap cells
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            const value = heatmapData[i][j];
+            const color = valueToJetColor(value);
+            tempCtx.fillStyle = color;
+            tempCtx.fillRect(j * cellWidth, i * cellHeight, cellWidth + 1, cellHeight + 1);
+        }
+    }
+    
+    // Apply slight blur for smoother visualization
+    if (gridSize < 30) {
+        tempCtx.filter = 'blur(2px)';
+        tempCtx.drawImage(tempCanvas, 0, 0);
+        tempCtx.filter = 'none';
+    }
+    
+    // Draw heatmap with alpha blending
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(tempCanvas, 0, 0);
+    ctx.globalAlpha = 1.0;
+}
+
+function valueToJetColor(value) {
+    // Jet colormap: blue -> cyan -> green -> yellow -> red
+    // Value should be between 0 and 1
+    const v = Math.max(0, Math.min(1, value));
+    
+    let r, g, b;
+    
+    if (v < 0.25) {
+        // Blue to Cyan
+        const t = v / 0.25;
+        r = 0;
+        g = Math.round(255 * t);
+        b = 255;
+    } else if (v < 0.5) {
+        // Cyan to Green
+        const t = (v - 0.25) / 0.25;
+        r = 0;
+        g = 255;
+        b = Math.round(255 * (1 - t));
+    } else if (v < 0.75) {
+        // Green to Yellow
+        const t = (v - 0.5) / 0.25;
+        r = Math.round(255 * t);
+        g = 255;
+        b = 0;
+    } else {
+        // Yellow to Red
+        const t = (v - 0.75) / 0.25;
+        r = 255;
+        g = Math.round(255 * (1 - t));
+        b = 0;
+    }
+    
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
 function showXAIDetail(frameIdx, entry) {
-    alert(`XAI Detail for Frame ${frameIdx}\n\nEmotion: ${entry.emotion.dominant_emotion}\nTime: ${entry.t.toFixed(1)}s\n\nAttention Map: ${entry.emotion.xai?.attention_map ? 'Available' : 'N/A'}\nGrad-CAM: ${entry.emotion.xai?.gradcam_heatmap ? 'Available' : 'N/A'}\n\n(Detailed XAI viewer coming soon!)`);
+    // Could implement a modal for detailed view in the future
+    console.log('[XAI] Detail view for frame', frameIdx, entry);
 }

@@ -5,6 +5,7 @@ Includes XAI features: Attention Maps and Grad-CAM for interpretability.
 """
 
 import sys
+import base64
 from pathlib import Path
 from typing import List, Dict, Optional
 import numpy as np
@@ -28,7 +29,7 @@ class EmotionProcessor:
     def __init__(self):
         """Initialize the emotion processor."""
         self.emotion_analyzer = EmotionAnalyzer(enable_face_detector=True)
-        self.xai_sample_interval = 30  # Extract XAI data every 30 frames (~1 second at 30fps)
+        self.xai_frame_count = 4  # Extract XAI data for exactly 4 strategic frames
     
     def extract_attention_maps(self, frame: np.ndarray) -> Optional[Dict]:
         """
@@ -336,6 +337,126 @@ class EmotionProcessor:
         
         return overlay
     
+    def _calculate_xai_target_frames(self, total_frames: int, timeline: List[Dict]) -> List[int]:
+        """
+        Calculate 4 strategic frame indices for XAI extraction.
+        
+        Strategy:
+        - Frame 1: ~25% of video (early baseline)
+        - Frame 2: ~50% of video (midpoint)
+        - Frame 3: ~75% of video (later analysis)
+        - Frame 4: Frame with highest emotion confidence (peak moment)
+        
+        Args:
+            total_frames: Total number of frames in video
+            timeline: Processed timeline with emotion data
+            
+        Returns:
+            List of 4 frame indices
+        """
+        if total_frames < 4:
+            return list(range(total_frames))
+        
+        # Calculate percentage-based frames
+        frame_25 = int(total_frames * 0.25)
+        frame_50 = int(total_frames * 0.50)
+        frame_75 = int(total_frames * 0.75)
+        
+        # Find frame with peak emotion (highest confidence in dominant emotion)
+        peak_frame = frame_50  # Default to midpoint
+        peak_confidence = 0.0
+        
+        for entry in timeline:
+            if entry['success'] and entry.get('emotions'):
+                dominant = entry.get('dominant_emotion')
+                if dominant and dominant in entry['emotions']:
+                    confidence = entry['emotions'][dominant]
+                    if confidence > peak_confidence:
+                        peak_confidence = confidence
+                        peak_frame = entry['frame']
+        
+        # Build list of target frames, avoiding duplicates
+        target_frames = []
+        candidates = [frame_25, frame_50, frame_75, peak_frame]
+        
+        for frame_idx in candidates:
+            # Find nearest successful frame
+            best_frame = self._find_nearest_successful_frame(frame_idx, timeline, target_frames)
+            if best_frame is not None and best_frame not in target_frames:
+                target_frames.append(best_frame)
+        
+        # Ensure we have exactly 4 frames (fill with other successful frames if needed)
+        if len(target_frames) < 4:
+            for entry in timeline:
+                if entry['success'] and entry['frame'] not in target_frames:
+                    target_frames.append(entry['frame'])
+                    if len(target_frames) >= 4:
+                        break
+        
+        return sorted(target_frames[:4])
+    
+    def _find_nearest_successful_frame(self, target_idx: int, timeline: List[Dict], exclude: List[int]) -> Optional[int]:
+        """
+        Find the nearest frame with successful emotion detection.
+        
+        Args:
+            target_idx: Target frame index
+            timeline: Processed timeline
+            exclude: Frame indices to exclude
+            
+        Returns:
+            Nearest successful frame index or None
+        """
+        if target_idx < 0 or target_idx >= len(timeline):
+            return None
+        
+        # Check target frame first
+        if timeline[target_idx]['success'] and target_idx not in exclude:
+            return target_idx
+        
+        # Search outward from target
+        max_search = len(timeline)
+        for offset in range(1, max_search):
+            # Check frame before
+            if target_idx - offset >= 0:
+                if timeline[target_idx - offset]['success'] and (target_idx - offset) not in exclude:
+                    return target_idx - offset
+            # Check frame after
+            if target_idx + offset < len(timeline):
+                if timeline[target_idx + offset]['success'] and (target_idx + offset) not in exclude:
+                    return target_idx + offset
+        
+        return None
+    
+    def _encode_face_image_base64(self, frame: np.ndarray) -> Optional[str]:
+        """
+        Detect face, crop it, and encode as Base64 JPEG.
+        
+        Args:
+            frame: Input frame (BGR)
+            
+        Returns:
+            Base64 encoded face image string or None
+        """
+        try:
+            face_crop, face_region = self.emotion_analyzer._detect_and_crop_face(frame)
+            if face_crop is None:
+                return None
+            
+            # Resize face to reasonable size for storage (150x150)
+            face_resized = cv2.resize(face_crop, (150, 150))
+            
+            # Encode to JPEG
+            _, buffer = cv2.imencode('.jpg', face_resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            
+            # Convert to Base64
+            face_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            return face_base64
+        except Exception as e:
+            print(f"[EmotionProcessor] Face encoding error: {e}")
+            return None
+
     def compute_emotion_summary(self, frames: List[np.ndarray], fps: float, extract_xai: bool = True) -> Dict:
         """
         Process frames through emotion analyzer and generate timeline + summary.
@@ -353,7 +474,7 @@ class EmotionProcessor:
         """
         print(f"[EmotionProcessor] Processing {len(frames)} frames for emotion analysis...")
         if extract_xai:
-            print(f"[EmotionProcessor] XAI extraction enabled (every {self.xai_sample_interval} frames)")
+            print(f"[EmotionProcessor] XAI extraction enabled (4 strategic frames)")
         
         # Reset analyzer
         self.emotion_analyzer.emotion_counts = {e: 0 for e in self.emotion_analyzer.emotions}
@@ -362,10 +483,11 @@ class EmotionProcessor:
         timeline = []
         xai_frames = []  # Frame indices where XAI data is available
         
-        # Process each frame
+        # PHASE 1: Process all frames for emotion detection
+        print(f"[EmotionProcessor] Phase 1: Detecting emotions in all frames...")
         for frame_idx, frame in enumerate(frames):
             # Calculate timestamp
-            timestamp = frame_idx / fps
+            timestamp = frame_idx / fps if fps > 0 else 0
             
             # Detect emotion
             emotion_data = self.emotion_analyzer.detect_emotion(frame)
@@ -382,26 +504,6 @@ class EmotionProcessor:
                 'has_xai': False
             }
             
-            # Extract XAI data for sampled frames
-            if extract_xai and emotion_data['success'] and frame_idx % self.xai_sample_interval == 0:
-                print(f"[EmotionProcessor] Extracting XAI for frame {frame_idx}...")
-                
-                # Extract attention maps
-                attention_data = self.extract_attention_maps(frame)
-                if attention_data:
-                    timeline_entry['attention_map'] = attention_data['attention_map'].tolist()
-                    timeline_entry['attention_grid_size'] = attention_data['grid_size']
-                
-                # Extract Grad-CAM
-                gradcam_data = self.extract_gradcam(frame, target_emotion=emotion_data.get('dominant_emotion'))
-                if gradcam_data:
-                    timeline_entry['gradcam_heatmap'] = gradcam_data['gradcam_heatmap'].tolist()
-                    timeline_entry['gradcam_target'] = gradcam_data['target_emotion']
-                
-                if attention_data or gradcam_data:
-                    timeline_entry['has_xai'] = True
-                    xai_frames.append(frame_idx)
-            
             # Track emotions
             if emotion_data['success']:
                 dominant = emotion_data['dominant_emotion']
@@ -409,6 +511,45 @@ class EmotionProcessor:
                 self.emotion_analyzer.all_frames_emotions.append(dominant)
             
             timeline.append(timeline_entry)
+        
+        # PHASE 2: Extract XAI for 4 strategic frames
+        if extract_xai:
+            print(f"[EmotionProcessor] Phase 2: Selecting 4 strategic frames for XAI...")
+            target_frames = self._calculate_xai_target_frames(len(frames), timeline)
+            print(f"[EmotionProcessor] Target XAI frames: {target_frames}")
+            
+            for frame_idx in target_frames:
+                if frame_idx >= len(frames):
+                    continue
+                    
+                frame = frames[frame_idx]
+                entry = timeline[frame_idx]
+                
+                if not entry['success']:
+                    continue
+                
+                print(f"[EmotionProcessor] Extracting XAI for frame {frame_idx} (t={entry['t']}s, {entry['dominant_emotion']})...")
+                
+                # Extract attention maps
+                attention_data = self.extract_attention_maps(frame)
+                if attention_data:
+                    entry['attention_map'] = attention_data['attention_map'].tolist()
+                    entry['attention_grid_size'] = attention_data['grid_size']
+                
+                # Extract Grad-CAM
+                gradcam_data = self.extract_gradcam(frame, target_emotion=entry.get('dominant_emotion'))
+                if gradcam_data:
+                    entry['gradcam_heatmap'] = gradcam_data['gradcam_heatmap'].tolist()
+                    entry['gradcam_target'] = gradcam_data['target_emotion']
+                
+                # Encode face image for visualization
+                face_base64 = self._encode_face_image_base64(frame)
+                if face_base64:
+                    entry['face_image_base64'] = face_base64
+                
+                if attention_data or gradcam_data:
+                    entry['has_xai'] = True
+                    xai_frames.append(frame_idx)
         
         # Calculate summary statistics
         total_frames = len(frames)
@@ -448,7 +589,7 @@ class EmotionProcessor:
         print(f"[EmotionProcessor]   Dominant emotion: {dominant_emotion}")
         print(f"[EmotionProcessor]   Detection rate: {detection_rate:.1f}%")
         if extract_xai:
-            print(f"[EmotionProcessor]   XAI data extracted for {len(xai_frames)} frames")
+            print(f"[EmotionProcessor]   XAI data extracted for {len(xai_frames)} frames: {xai_frames}")
         
         return {
             'timeline': timeline,

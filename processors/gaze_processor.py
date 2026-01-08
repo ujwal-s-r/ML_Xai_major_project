@@ -48,7 +48,7 @@ class GazeProcessor:
         # Process each frame
         for frame_idx, frame in enumerate(frames):
             # Calculate timestamp
-            timestamp = frame_idx / fps
+            timestamp = frame_idx / fps if fps > 0 else 0
             
             # Analyze frame
             _, metrics = self.gaze_estimator.analyze_frame(frame)

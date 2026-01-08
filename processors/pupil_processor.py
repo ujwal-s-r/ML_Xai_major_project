@@ -48,7 +48,7 @@ class PupilProcessor:
         # Process each frame
         for frame_idx, frame in enumerate(frames):
             # Calculate timestamp
-            timestamp = frame_idx / fps
+            timestamp = frame_idx / fps if fps > 0 else 0
             
             # Detect iris
             iris_data = self.iris_tracker.detect_iris(frame)

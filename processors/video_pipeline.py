@@ -83,6 +83,11 @@ class VideoAnalysisPipeline:
             - timeline: List of per-frame data from all models
             - summary: Aggregate metrics from all models
         """
+        # Ensure fps is valid to prevent division by zero
+        if fps is None or fps <= 0:
+            fps = 30.0
+            print(f"[Pipeline] Warning: Invalid FPS, using default {fps}")
+        
         print(f"[Pipeline] Processing {len(frames)} frames through models...")
         
         # Process through blink counter
@@ -153,8 +158,8 @@ class VideoAnalysisPipeline:
         
         # Get video properties
         fps = cap.get(cv2.CAP_PROP_FPS)
-        if fps == 0:
-            fps = 30.0  # Default fallback
+        if fps is None or fps <= 0:
+            fps = 30.0  # Default fallback for webm or other formats without FPS metadata
         
         frames = []
         
@@ -258,8 +263,21 @@ class VideoAnalysisPipeline:
                     if 'gradcam_heatmap' in emotion_entry:
                         xai_data['gradcam_heatmap'] = emotion_entry['gradcam_heatmap']
                         xai_data['gradcam_target'] = emotion_entry.get('gradcam_target')
+                    if 'face_image_base64' in emotion_entry:
+                        xai_data['face_image_base64'] = emotion_entry['face_image_base64']
                     if xai_data:
                         entry['emotion']['xai'] = xai_data
+                        
+                # Also add XAI fields at top level for dashboard compatibility
+                if emotion_entry.get('has_xai'):
+                    if 'attention_map' in emotion_entry:
+                        entry['attention_map'] = emotion_entry['attention_map']
+                        entry['attention_grid_size'] = emotion_entry.get('attention_grid_size')
+                    if 'gradcam_heatmap' in emotion_entry:
+                        entry['gradcam_heatmap'] = emotion_entry['gradcam_heatmap']
+                        entry['gradcam_target'] = emotion_entry.get('gradcam_target')
+                    if 'face_image_base64' in emotion_entry:
+                        entry['face_image_base64'] = emotion_entry['face_image_base64']
             
             merged.append(entry)
         
